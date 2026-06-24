@@ -1,0 +1,14 @@
+{
+  "name": "matchmaker-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test e2e.js",
+    "test:unit": "node --test rotation-unit.js",
+    "test:morph": "node --test morph-unit.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  }
+}
