@@ -1431,12 +1431,7 @@ window.app = (() => {
             morphSection.appendChild(done);
         }
 
-        const backBtn = _el('button', { className: 'load-btn' });
-        backBtn.textContent = '← Back to Align';
-        backBtn.style.background = 'var(--text-dim, #555)';
-        backBtn.setAttribute('aria-label', 'Go back to Align step');
-        backBtn.onclick = () => goStep(3);
-        morphSection.appendChild(backBtn);
+
         container.appendChild(morphSection);
         container.appendChild(_el('div', { className: 'sph-divider' }));
 
@@ -1544,12 +1539,6 @@ window.app = (() => {
             done.textContent = `✓ ${matchResult.matched_ply.split('/').pop()} saved`;
             matchSection.appendChild(done);
 
-            const continueBtn = _el('button', { className: 'load-btn' });
-            continueBtn.textContent = '→ Continue to View';
-            continueBtn.style.background = 'var(--accent2)';
-            continueBtn.setAttribute('aria-label', 'Continue to trajectory view');
-            continueBtn.onclick = () => goStep(5);
-            matchSection.appendChild(continueBtn);
         }
 
         container.appendChild(matchSection);
