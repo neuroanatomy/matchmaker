@@ -113,6 +113,53 @@
     .slot-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
     .slot-status { font-size: 11px; color: var(--accent2); min-height: 16px; }
 
+    /* ── Subject roster ── */
+    .subject-roster { display: flex; flex-direction: column; gap: 2px; margin-bottom: 4px; }
+    .subject-row {
+      display: flex; align-items: center; gap: 4px;
+      padding: 4px 6px; border-radius: 4px; cursor: pointer;
+      border: 1px solid transparent; transition: background .12s;
+    }
+    .subject-row:hover { background: rgba(108,142,191,.12); }
+    .subject-row.active { background: rgba(108,142,191,.2); border-color: var(--accent); }
+    .subject-row-info { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
+    .subject-row-id { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; }
+    .subject-row-file { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .subject-dots { display: flex; gap: 3px; flex-shrink: 0; }
+    .subject-dots .dot { font-size: 8px; color: var(--border); }
+    .subject-dots .dot.dot-on { color: var(--accent2); }
+    .remove-btn {
+      flex-shrink: 0; background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
+      border-radius: 3px; transition: color .12s;
+    }
+    .remove-btn:hover { color: #f55; }
+    .remove-confirm {
+      font-size: 11px; color: var(--text); padding: 4px 6px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+      margin-top: 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .remove-confirm-yes {
+      padding: 2px 8px; font-size: 11px; border: none; border-radius: 3px;
+      background: #c0392b; color: #fff; cursor: pointer;
+    }
+    .remove-confirm-no {
+      padding: 2px 8px; font-size: 11px; border: 1px solid var(--border);
+      border-radius: 3px; background: none; color: var(--muted); cursor: pointer;
+    }
+    /* Preprocess inline chips */
+    .pre-chips { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+    .pre-chip { font-size: 10px; padding: 1px 5px; border-radius: 8px; font-family: monospace; }
+    .pre-chip.pre-done { background: rgba(126,200,164,.2); color: var(--accent2); }
+    .pre-chip.pre-missing { background: rgba(255,255,255,.05); color: var(--muted); }
+    /* Align landmark count badge */
+    .sulci-badge { font-size: 10px; color: var(--accent2); margin-left: 4px; }
+    /* Match subject selects */
+    .match-subject-select {
+      flex: 1; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font-size: 11px; padding: 3px 6px;
+    }
+
     /* ── Quick-load pills ── */
     .quickload-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-top: 8px; }
     .quickload-pills { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -184,6 +231,33 @@
     .sph-tex-active  { color: var(--accent2); font-weight: 600; }
     .sph-clickable { cursor: pointer; border-radius: 3px; padding: 1px 3px; margin: -1px -3px; transition: background .12s; }
     .sph-clickable:hover { background: rgba(108,142,191,.2); }
+
+    /* ── Match roster ── */
+    .match-roster-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 0; font-size: 0.85rem;
+    }
+    .match-roster-name {
+      flex: 1; font-weight: 500; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--text);
+    }
+    .match-roster-status {
+      color: var(--muted); font-size: 10px; white-space: nowrap; flex-shrink: 0;
+    }
+    .roster-load-btn {
+      font-size: 11px; padding: 2px 8px; border-radius: 4px;
+      background: var(--accent); color: #fff; border: none; cursor: pointer;
+      flex-shrink: 0; transition: opacity .15s;
+    }
+    .roster-load-btn:disabled { opacity: .4; cursor: default; }
+    .roster-load-btn:not(:disabled):hover { opacity: .85; }
+    .roster-del-btn {
+      font-size: 12px; padding: 2px 5px; border-radius: 3px;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); cursor: pointer;
+      flex-shrink: 0; transition: color .12s, border-color .12s;
+    }
+    .roster-del-btn:hover { color: #e05252; border-color: #e05252; }
 
     /* ── Match panel ── */
     .match-desc { font-size: 11px; color: var(--muted); margin: 2px 0 4px; }
@@ -334,6 +408,36 @@
     #traj-time {
       font-size: 11px; color: var(--muted); flex-shrink: 0; width: 34px; text-align: right;
     }
+
+    /* ── Project creation modal ─────────────────────────────────────────── */
+    .pm-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000;
+    }
+    .pm-box {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 24px; width: min(480px, 90vw);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .pm-title { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+    .pm-desc  { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+    .pm-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    .pm-input {
+      width: 100%; box-sizing: border-box;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text); font-size: 13px; padding: 6px 8px;
+    }
+    .pm-input:focus { outline: none; border-color: var(--accent2); }
+    .pm-error { color: #e07070; font-size: 12px; margin-top: 4px; }
+    .pm-btns  { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+    .pm-btn   {
+      padding: 7px 16px; border-radius: 4px; font-size: 13px;
+      cursor: pointer; border: none;
+    }
+    .pm-btn-cancel  { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+    .pm-btn-confirm { background: var(--accent2); color: #fff; }
+    .pm-btn:hover { opacity: .85; }
   </style>
 </head>
 <body>

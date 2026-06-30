@@ -22,7 +22,7 @@ const PORT = 5099;
 const BASE_URL = `http://localhost:${PORT}`;
 
 // Path to the test mesh (relative to project root)
-const MESH_REL_PATH = 'data/external/F02_P0/seg-pial-t2/e2.ply';
+const MESH_REL_PATH = 'data/external/project/data/raw/meshes/F02_P0/mesh.ply';
 const MESH_ABS_PATH = path.join(PROJECT_ROOT, MESH_REL_PATH);
 
 // Background colour of the 3D viewer (#1a1a2e)
@@ -99,14 +99,13 @@ async function countNonBgPixelsMain(page) {
     }, BG, BG_TOLERANCE);
 }
 
-// Click a slot tab ('ref' or 'mov') in the Load panel.
-async function clickSlotTab(page, slot) {
-    await page.evaluate((slot) => {
-        const btn = [...document.querySelectorAll('.slot-tab')]
-            .find(b => b.textContent.toLowerCase().includes(slot));
-        if (!btn) throw new Error(`Slot tab for "${slot}" not found`);
-        btn.click();
-    }, slot);
+// Click a subject roster row by subject ID.
+async function clickSubjectRow(page, subjectId) {
+    await page.evaluate((id) => {
+        const row = document.querySelector(`[data-subject-id="${id}"]`);
+        if (!row) throw new Error(`Subject row for "${id}" not found`);
+        row.click();
+    }, subjectId);
 }
 
 // Click a quick-load pill by label.
@@ -167,14 +166,14 @@ test('connection badge shows connected', async () => {
 
 test('/api/files lists the test mesh', async () => {
     const res = await fetch(`${BASE_URL}/api/files?dir=${encodeURIComponent(
-        path.join(PROJECT_ROOT, 'data/external/F02_P0/seg-pial-t2')
+        path.join(PROJECT_ROOT, 'data/external/project/data/raw/meshes/F02_P0')
     )}`);
     const entries = await res.json();
     const names = entries.map(e => e.name);
-    assert.ok(names.includes('e2.ply'), `e2.ply not found in listing, got: ${names}`);
+    assert.ok(names.includes('mesh.ply'), `mesh.ply not found in listing, got: ${names}`);
 });
 
-test('/api/mesh serves e2.ply with correct PLY header', async () => {
+test('/api/mesh serves mesh.ply with correct PLY header', async () => {
     const url = `${BASE_URL}/api/mesh?path=${encodeURIComponent(MESH_ABS_PATH)}`;
     const res = await fetch(url);
     assert.equal(res.status, 200);
@@ -213,7 +212,7 @@ async function countNonBgPixelsStereo(page) {
     }, BG, BG_TOLERANCE);
 }
 
-test('e2.ply loads and renders non-background pixels', async () => {
+test('mesh.ply loads and renders non-background pixels', async () => {
     // Trigger mesh load via the public JS API
     await page.evaluate(async (absPath) => {
         await window.app.loadMeshByPath(absPath);
@@ -277,10 +276,10 @@ test('Align: rotation sliders appear after F02_P0 quick-load + step 3', async ()
     assert.ok(f02btn, 'F02_P0 quick-load button should be present');
     await f02btn.click();
 
-    // Wait for companions to arrive (sphere companion makes "e2.sphere.ply" appear in panel)
+    // Wait for companions to arrive (sphere companion makes "sphere.ply" appear in panel)
     await page.waitForFunction(() => {
         const items = [...document.querySelectorAll('.sph-item')];
-        return items.some(el => el.textContent.includes('e2.sphere.ply'));
+        return items.some(el => el.textContent.includes('sphere.ply'));
     }, { timeout: 10_000 });
 
     // Navigate to step 3
@@ -332,97 +331,123 @@ test('Align: moving Twist slider to 90° re-renders disc (non-bg pixels present)
         `After Twist=90° re-render, expected non-background pixels, got ${nonBg}/25`);
 });
 
-// ── Load step tests (TC-L01 through TC-L07) ──────────────────────────────────
+test('Align: programmatic applyDrag updates Tilt↕ and Spin↔ slider values', async () => {
+    // Read baseline slider values
+    const before = await page.evaluate(() => ({
+        tiltv: parseInt(document.getElementById('rot-tiltv')?.value ?? '0'),
+        tilth: parseInt(document.getElementById('rot-tilth')?.value ?? '0'),
+    }));
+
+    // Reset StereoView to identity so the drag result is predictable
+    await page.evaluate(() => {
+        const sv = window._alignStereoView;
+        if (!sv) throw new Error('_alignStereoView not found');
+        sv.setEulerZYX(0, 0, 0);
+    });
+
+    // Apply a sizeable horizontal drag (Δx=200, Δy=0) which rotates only Ry (Tilt↕/beta)
+    await page.evaluate(() => {
+        const sv = window._alignStereoView;
+        sv._applyDrag(200, 0);
+        sv._render();
+        sv._onRotationChange?.();
+    });
+
+    await new Promise(r => setTimeout(r, 100));
+
+    const after = await page.evaluate(() => ({
+        tiltv: parseInt(document.getElementById('rot-tiltv')?.value ?? '0'),
+        tilth: parseInt(document.getElementById('rot-tilth')?.value ?? '0'),
+    }));
+
+    // A horizontal drag of 200px at scale=0.005 → Ry(1 rad ≈ 57°)
+    // Decomposed from identity: alpha≈0, beta≈57°, gamma≈0
+    // So tiltv should be non-zero after the drag
+    assert.ok(Math.abs(after.tiltv) > 5,
+        `Tilt↕ slider should reflect horizontal drag (Ry rotation), got ${after.tiltv}°`);
+    assert.ok(Math.abs(after.tilth) < 5,
+        `Spin↔ slider should stay near 0 for pure horizontal drag, got ${after.tilth}°`);
+});
+
+// ── Load step tests (TC-L01 through TC-L09) ───────────────────────────────────
 //
-// These tests are sequential and share page state. They start from a known
-// state: step 1 active, both slots empty (achieved by reloading the page
-// before TC-L01 and relying on sequential ordering thereafter).
+// These tests are sequential and share page state. TC-L01 starts from a clean
+// state (page reload). Subsequent tests build on the loaded roster.
 //
+// Subject roster model: subjects appear as .subject-row[data-subject-id] elements.
 // Camera default position: [0, 0, 3] (set in Viewer3D._initRenderer).
 
-test('TC-L01: loading Ref shows native mesh in single-mesh mode', async () => {
+test('TC-L01: loading a mesh adds it to the subject roster', async () => {
     // Start clean at step 1
     await page.reload({ waitUntil: 'networkidle0' });
     await page.click('[data-step="1"]');
     await new Promise(r => setTimeout(r, 300));
 
-    // Ref tab should be active by default; load F02_P0
     await clickPill(page, 'F02_P0');
-    await waitForStatus(page, 'REF loaded');
+    await waitForStatus(page, 'mesh.ply loaded');
     await new Promise(r => setTimeout(r, 500));
 
-    // Viewer must be in single-mesh mode only
-    const meshState = await page.evaluate(() => ({
-        hasMain: window._viewer._meshes.has('main'),
-        hasRef:  window._viewer._meshes.has('ref'),
-        hasMov:  window._viewer._meshes.has('mov'),
-    }));
-    assert.ok(meshState.hasMain, 'Viewer should use single-mesh slot "main"');
-    assert.ok(!meshState.hasRef, 'Pair-mode "ref" slot should be absent');
-    assert.ok(!meshState.hasMov, 'Pair-mode "mov" slot should be absent');
+    // Subject row must appear in roster
+    const rowExists = await page.$('[data-subject-id="F02_P0"]').then(el => !!el);
+    assert.ok(rowExists, '.subject-row for F02_P0 should appear after load');
 
-    // Panel must show active native mesh item
-    const activeText = await page.$eval('.sph-item-active', el => el.textContent.trim())
-        .catch(() => '');
-    assert.ok(activeText.includes('e2.ply'), `Active mesh item should be e2.ply, got "${activeText}"`);
+    // The loaded row should be marked active
+    const isActive = await page.$eval('[data-subject-id="F02_P0"]',
+        el => el.classList.contains('active'));
+    assert.ok(isActive, 'F02_P0 row should be active after load');
 
     // Mesh must be visible
     const nonBg = await countNonBgPixelsMain(page);
     assert.ok(nonBg > 0, `Viewer should show non-background pixels after load, got ${nonBg}/25`);
 });
 
-test('TC-L02: loading Mov slot shows only Mov in single-mesh mode (no pair overlay)', async () => {
-    // Precondition: Ref loaded (TC-L01). Switch to Mov tab and load F06_P4.
-    await clickSlotTab(page, 'mov');
-    await new Promise(r => setTimeout(r, 200));
-
+test('TC-L02: loading a second mesh appends it to the roster', async () => {
+    // Precondition: F02_P0 loaded (TC-L01)
     await clickPill(page, 'F06_P4');
-    await waitForStatus(page, 'MOV loaded');
+    await waitForStatus(page, 'mesh.ply loaded');
     await new Promise(r => setTimeout(r, 500));
 
-    const meshState = await page.evaluate(() => ({
-        hasMain: window._viewer._meshes.has('main'),
-        hasRef:  window._viewer._meshes.has('ref'),
-        hasMov:  window._viewer._meshes.has('mov'),
-    }));
-    assert.ok(meshState.hasMain, 'Viewer should use single-mesh slot after loading Mov');
-    assert.ok(!meshState.hasRef,  'Pair-mode "ref" slot must be absent');
-    assert.ok(!meshState.hasMov,  'Pair-mode "mov" slot must be absent');
+    // Both roster rows must exist
+    const rowCount = await page.$$eval('.subject-row', rows => rows.length);
+    assert.ok(rowCount >= 2, `Roster should have at least 2 rows, got ${rowCount}`);
 
+    const f06Exists = await page.$('[data-subject-id="F06_P4"]').then(el => !!el);
+    assert.ok(f06Exists, 'F06_P4 row should appear in roster after load');
+
+    // F06_P4 is now the active/viewed subject
     const nonBg = await countNonBgPixelsMain(page);
-    assert.ok(nonBg > 0, `Viewer should show Mov mesh, got ${nonBg}/25`);
+    assert.ok(nonBg > 0, `Viewer should show F06_P4 mesh, got ${nonBg}/25`);
 });
 
-test('TC-L03: switching slot tabs updates the viewer', async () => {
-    // Precondition: both Ref (F02_P0) and Mov (F06_P4) loaded. Currently on Mov.
+test('TC-L03: clicking a subject row switches the active subject and updates the viewer', async () => {
+    // Precondition: F02_P0 and F06_P4 loaded; F06_P4 currently viewed
 
-    // Switch to Ref
-    await clickSlotTab(page, 'ref');
+    // Switch to F02_P0
+    await clickSubjectRow(page, 'F02_P0');
     await new Promise(r => setTimeout(r, 800));
 
-    let hasMain = await page.evaluate(() => window._viewer._meshes.has('main'));
-    assert.ok(hasMain, 'Viewer should have main mesh after switching to Ref tab');
-
-    let activeTab = await page.$eval('.slot-tab.active', el => el.textContent.trim());
-    assert.ok(activeTab.toLowerCase().includes('ref'), `Ref tab should be active, got "${activeTab}"`);
+    let isActive = await page.$eval('[data-subject-id="F02_P0"]',
+        el => el.classList.contains('active'));
+    assert.ok(isActive, 'F02_P0 row should be active after click');
 
     let nonBg = await countNonBgPixelsMain(page);
-    assert.ok(nonBg > 0, `Viewer should show Ref mesh after tab switch, got ${nonBg}/25`);
+    assert.ok(nonBg > 0, `Viewer should show F02_P0 mesh after row click, got ${nonBg}/25`);
 
-    // Switch back to Mov
-    await clickSlotTab(page, 'mov');
+    // Switch to F06_P4
+    await clickSubjectRow(page, 'F06_P4');
     await new Promise(r => setTimeout(r, 800));
 
-    activeTab = await page.$eval('.slot-tab.active', el => el.textContent.trim());
-    assert.ok(activeTab.toLowerCase().includes('mov'), `Mov tab should be active, got "${activeTab}"`);
+    isActive = await page.$eval('[data-subject-id="F06_P4"]',
+        el => el.classList.contains('active'));
+    assert.ok(isActive, 'F06_P4 row should be active after click');
 
     nonBg = await countNonBgPixelsMain(page);
-    assert.ok(nonBg > 0, `Viewer should show Mov mesh after switching back, got ${nonBg}/25`);
+    assert.ok(nonBg > 0, `Viewer should show F06_P4 mesh after row click, got ${nonBg}/25`);
 });
 
-test('TC-L04: tab switch preserves camera; geometry-type change resets it', async () => {
-    // Start on Ref tab
-    await clickSlotTab(page, 'ref');
+test('TC-L04: subject row click preserves camera; geometry-type change resets it', async () => {
+    // Start on F02_P0
+    await clickSubjectRow(page, 'F02_P0');
     await new Promise(r => setTimeout(r, 800));
 
     // Set a known non-default camera position
@@ -431,27 +456,27 @@ test('TC-L04: tab switch preserves camera; geometry-type change resets it', asyn
         window._viewer.controls.update();
     });
 
-    // Switch to Mov tab (preserveOrientation: true → camera must NOT reset)
-    await clickSlotTab(page, 'mov');
+    // Switch to F06_P4 (preserveOrientation: true → camera must NOT reset)
+    await clickSubjectRow(page, 'F06_P4');
     await new Promise(r => setTimeout(r, 800));
 
-    // Switch back to Ref (preserveOrientation: true → camera must NOT reset)
-    await clickSlotTab(page, 'ref');
+    // Switch back to F02_P0 (preserveOrientation: true → camera must NOT reset)
+    await clickSubjectRow(page, 'F02_P0');
     await new Promise(r => setTimeout(r, 800));
 
     const camZ = await page.evaluate(() => window._viewer.camera.position.z);
     assert.ok(Math.abs(camZ - 5) < 0.5,
-        `Camera z should be ~5 after tab switch (preserved), got ${camZ.toFixed(3)}`);
+        `Camera z should be ~5 after subject row switch (preserved), got ${camZ.toFixed(3)}`);
 
     // Now click a DIFFERENT geometry (sphere) — camera MUST reset to ~[0,0,3]
     const hasSphere = await page.evaluate(() =>
         [...document.querySelectorAll('.sph-item.sph-clickable')]
-            .some(el => el.textContent.includes('e2.sphere.ply')));
+            .some(el => el.textContent.includes('sphere.ply')));
 
     if (hasSphere) {
         await page.evaluate(() => {
             const el = [...document.querySelectorAll('.sph-item.sph-clickable')]
-                .find(el => el.textContent.includes('e2.sphere.ply'));
+                .find(el => el.textContent.includes('sphere.ply'));
             el?.click();
         });
         await new Promise(r => setTimeout(r, 1200));
@@ -463,14 +488,14 @@ test('TC-L04: tab switch preserves camera; geometry-type change resets it', asyn
 });
 
 test('TC-L05: texture toggle preserves camera orientation', async () => {
-    // Start on Ref tab with native mesh (camera already at default after TC-L04 geometry switch)
-    await clickSlotTab(page, 'ref');
+    // Start on F02_P0 with native mesh (camera already at default after TC-L04 geometry switch)
+    await clickSubjectRow(page, 'F02_P0');
     await new Promise(r => setTimeout(r, 500));
 
     // Ensure native mesh is shown (click it if sphere is currently active)
     await page.evaluate(() => {
         const el = [...document.querySelectorAll('.sph-item.sph-clickable')]
-            .find(el => el.textContent.includes('e2.ply') && !el.textContent.includes('sphere'));
+            .find(el => el.textContent.includes('mesh.ply') && !el.textContent.includes('sphere'));
         el?.click();
     });
     await new Promise(r => setTimeout(r, 800));
@@ -521,14 +546,14 @@ test('TC-L05: texture toggle preserves camera orientation', async () => {
 });
 
 test('TC-L06: clicking already-active geometry type does not reload or reset camera', async () => {
-    // Start on Ref tab with native mesh active
-    await clickSlotTab(page, 'ref');
+    // Start on F02_P0 with native mesh active
+    await clickSubjectRow(page, 'F02_P0');
     await new Promise(r => setTimeout(r, 500));
 
     // Click native mesh to ensure it's active
     await page.evaluate(() => {
         const el = [...document.querySelectorAll('.sph-item.sph-clickable')]
-            .find(el => el.textContent.includes('e2.ply') && !el.textContent.includes('sphere'));
+            .find(el => el.textContent.includes('mesh.ply') && !el.textContent.includes('sphere'));
         el?.click();
     });
     await new Promise(r => setTimeout(r, 800));
@@ -539,10 +564,10 @@ test('TC-L06: clicking already-active geometry type does not reload or reset cam
         window._viewer.controls.update();
     });
 
-    // Click the native mesh AGAIN — should be a no-op
+    // Click the native mesh AGAIN — should be a no-op (same geometry type)
     await page.evaluate(() => {
         const el = [...document.querySelectorAll('.sph-item.sph-clickable')]
-            .find(el => el.textContent.includes('e2.ply') && !el.textContent.includes('sphere'));
+            .find(el => el.textContent.includes('mesh.ply') && !el.textContent.includes('sphere'));
         el?.click();
     });
     await new Promise(r => setTimeout(r, 400));
@@ -552,99 +577,124 @@ test('TC-L06: clicking already-active geometry type does not reload or reset cam
         `Camera should not reset when clicking already-active geometry, got z=${camZ.toFixed(3)}`);
 });
 
-test('TC-L07: reloading a slot resets its companion state and resets the camera', async () => {
-    // Precondition: Ref loaded as F02_P0 with sphere companion visible
-    await clickSlotTab(page, 'ref');
+test('TC-L07: loading a new subject resets companion state and camera', async () => {
+    // Precondition: F02_P0 and F06_P4 loaded; F02_P0 currently active/viewed
+
+    // Ensure F02_P0 is viewed so sphere companion is visible in panel
+    await clickSubjectRow(page, 'F02_P0');
     await new Promise(r => setTimeout(r, 400));
 
     const hasSphere = await page.evaluate(() =>
         [...document.querySelectorAll('.sph-item')]
-            .some(el => el.textContent.includes('e2.sphere.ply')));
-    assert.ok(hasSphere, 'F02_P0 should have sphere companion in panel before reload');
+            .some(el => el.textContent.includes('sphere.ply')));
+    assert.ok(hasSphere, 'F02_P0 should have sphere companion in panel before new load');
 
-    // Set non-default camera
+    // Set a non-default camera position (distinguishable from default [0,0,3])
     await page.evaluate(() => {
-        window._viewer.camera.position.set(3, 3, 3);
+        window._viewer.camera.position.set(5, 2, 1);
         window._viewer.controls.update();
     });
 
-    // Reload Ref with F10_P8
+    // Load F10_P8 — new subject; camera must reset
     await clickPill(page, 'F10_P8');
-    await waitForStatus(page, 'REF loaded');
+    await waitForStatus(page, 'mesh.ply loaded');
     await new Promise(r => setTimeout(r, 800));
 
-    // Camera must have reset (fresh load)
-    const camZ = await page.evaluate(() => window._viewer.camera.position.z);
-    assert.ok(Math.abs(camZ - 3) < 0.5,
-        `Camera z should reset to ~3 on slot reload, got ${camZ.toFixed(3)}`);
-
-    // Viewer still in single-mesh mode
-    const meshState = await page.evaluate(() => ({
-        hasMain: window._viewer._meshes.has('main'),
-        hasRef:  window._viewer._meshes.has('ref'),
+    // Camera must have reset to default ~[0,0,3]
+    const camPos = await page.evaluate(() => ({
+        x: window._viewer.camera.position.x,
+        y: window._viewer.camera.position.y,
+        z: window._viewer.camera.position.z,
     }));
-    assert.ok(meshState.hasMain, 'Viewer should be in single-mesh mode after reload');
-    assert.ok(!meshState.hasRef,  'Pair-mode ref slot should be absent after reload');
+    assert.ok(Math.abs(camPos.z - 3) < 0.5,
+        `Camera z should reset to ~3 on new subject load, got ${camPos.z.toFixed(3)}`);
+    assert.ok(Math.abs(camPos.x) < 1,
+        `Camera x should reset to ~0 on new subject load, got ${camPos.x.toFixed(3)}`);
+
+    // F10_P8 row must appear in roster
+    const f10Exists = await page.$('[data-subject-id="F10_P8"]').then(el => !!el);
+    assert.ok(f10Exists, 'F10_P8 row should appear in roster after load');
 
     // New mesh visible
     const nonBg = await countNonBgPixelsMain(page);
     assert.ok(nonBg > 0, `Reloaded mesh should be visible, got ${nonBg}/25`);
 });
 
-test('Align: programmatic applyDrag updates Tilt↕ and Spin↔ slider values', async () => {
-    // Read baseline slider values
-    const before = await page.evaluate(() => ({
-        tiltv: parseInt(document.getElementById('rot-tiltv')?.value ?? '0'),
-        tilth: parseInt(document.getElementById('rot-tilth')?.value ?? '0'),
-    }));
+test('TC-L08: loading three subjects shows three roster rows', async () => {
+    // Start clean
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.click('[data-step="1"]');
+    await new Promise(r => setTimeout(r, 300));
 
-    // Reset StereoView to identity so the drag result is predictable
-    await page.evaluate(() => {
-        const sv = window._alignStereoView;
-        if (!sv) throw new Error('_alignStereoView not found');
-        sv.setEulerZYX(0, 0, 0);
-    });
+    for (const label of ['F02_P0', 'F06_P4', 'F10_P8']) {
+        await clickPill(page, label);
+        await waitForStatus(page, 'mesh.ply loaded');
+        await new Promise(r => setTimeout(r, 400));
+    }
 
-    // Apply a sizeable horizontal drag (Δx=200, Δy=0) which rotates only Ry (Tilt↕/beta)
-    await page.evaluate(() => {
-        const sv = window._alignStereoView;
-        sv._applyDrag(200, 0);
-        sv._render();
-        sv._onRotationChange?.();
-    });
+    const rowCount = await page.$$eval('.subject-row', rows => rows.length);
+    assert.equal(rowCount, 3, `Expected 3 roster rows, got ${rowCount}`);
 
-    await new Promise(r => setTimeout(r, 100));
-
-    const after = await page.evaluate(() => ({
-        tiltv: parseInt(document.getElementById('rot-tiltv')?.value ?? '0'),
-        tilth: parseInt(document.getElementById('rot-tilth')?.value ?? '0'),
-    }));
-
-    // A horizontal drag of 200px at scale=0.005 → Ry(1 rad ≈ 57°)
-    // Decomposed from identity: alpha≈0, beta≈57°, gamma≈0
-    // So tiltv should be non-zero after the drag
-    assert.ok(Math.abs(after.tiltv) > 5,
-        `Tilt↕ slider should reflect horizontal drag (Ry rotation), got ${after.tiltv}°`);
-    assert.ok(Math.abs(after.tilth) < 5,
-        `Spin↔ slider should stay near 0 for pure horizontal drag, got ${after.tilth}°`);
+    for (const id of ['F02_P0', 'F06_P4', 'F10_P8']) {
+        const exists = await page.$(`[data-subject-id="${id}"]`).then(el => !!el);
+        assert.ok(exists, `Row for ${id} should be present in roster`);
+    }
 });
 
-// ── Match step tests (M-01 through M-04) ─────────────────────────────────────
+test('TC-L09: remove button shows confirmation; cancel keeps the row', async () => {
+    // Precondition: 3 rows from TC-L08
+
+    // Click the × button on F02_P0's row
+    await page.evaluate(() => {
+        const row = document.querySelector('[data-subject-id="F02_P0"]');
+        if (!row) throw new Error('F02_P0 row not found');
+        const btn = row.querySelector('.remove-btn');
+        if (!btn) throw new Error('.remove-btn not found in F02_P0 row');
+        btn.click();
+    });
+    await new Promise(r => setTimeout(r, 200));
+
+    // Confirmation dialog must appear inside the row
+    const hasConfirm = await page.evaluate(() =>
+        !!document.querySelector('[data-subject-id="F02_P0"] .remove-confirm'));
+    assert.ok(hasConfirm, 'Removal confirmation should appear after clicking ×');
+
+    // Click Cancel
+    await page.evaluate(() => {
+        const btn = document.querySelector('[data-subject-id="F02_P0"] .remove-confirm-no');
+        if (!btn) throw new Error('.remove-confirm-no not found');
+        btn.click();
+    });
+    await new Promise(r => setTimeout(r, 200));
+
+    // Dialog gone, row still present
+    const confirmGone = await page.evaluate(() =>
+        !document.querySelector('[data-subject-id="F02_P0"] .remove-confirm'));
+    assert.ok(confirmGone, 'Confirmation dialog should disappear after Cancel');
+
+    const rowStillPresent = await page.$('[data-subject-id="F02_P0"]').then(el => !!el);
+    assert.ok(rowStillPresent, 'F02_P0 row should still be present after Cancel');
+
+    const rowCount = await page.$$eval('.subject-row', rows => rows.length);
+    assert.equal(rowCount, 3, `Roster should still have 3 rows after cancel, got ${rowCount}`);
+});
+
+// ── Match step tests (M-01 through M-07) ─────────────────────────────────────
 //
-// Sequential; M-01 reloads to get a clean state with only Ref loaded.
-// M-04 then loads Mov and re-navigates to step 4.
+// Sequential; M-01 reloads to get a clean state with only one subject loaded.
+// M-04 then loads the second subject and navigates to step 4.
 
-const F02_ABS = path.join(PROJECT_ROOT, 'data/external/F02_P0/seg-pial-t2/e2.ply');
-const F06_ABS = path.join(PROJECT_ROOT, 'data/external/F06_P4/seg-pial-t2/e2.ply');
+const F02_ABS = path.join(PROJECT_ROOT, 'data/external/project/data/raw/meshes/F02_P0/mesh.ply');
+const F06_ABS = path.join(PROJECT_ROOT, 'data/external/project/data/raw/meshes/F06_P4/mesh.ply');
 
-test('M-01: step 4 panel renders after loading Ref only', async () => {
-    // Start clean: only Ref loaded
+test('M-01: step 4 panel renders after loading one subject', async () => {
+    // Start clean: only F02_P0 loaded
     await page.reload({ waitUntil: 'networkidle0' });
     await page.click('[data-step="1"]');
     await new Promise(r => setTimeout(r, 300));
 
     await clickPill(page, 'F02_P0');
-    await waitForStatus(page, 'REF loaded');
+    await waitForStatus(page, 'mesh.ply loaded');
     await new Promise(r => setTimeout(r, 500));
 
     // Navigate to step 4
@@ -657,10 +707,17 @@ test('M-01: step 4 panel renders after loading Ref only', async () => {
 
     const hasMatchBtn = await page.$('#btn-run-match').then(el => !!el);
     assert.ok(hasMatchBtn, 'Step 4 panel should render #btn-run-match');
+
+    // Ref/Mov subject pickers must be present
+    const hasRefPicker = await page.$('#match-ref-select').then(el => !!el);
+    assert.ok(hasRefPicker, '#match-ref-select should be present in step 4 panel');
+
+    const hasMovPicker = await page.$('#match-mov-select').then(el => !!el);
+    assert.ok(hasMovPicker, '#match-mov-select should be present in step 4 panel');
 });
 
 test('M-02: inputs checklist shows ✓ for ref, ✗ for mov and landmarks', async () => {
-    // Precondition: step 4, only Ref (F02_P0) loaded
+    // Precondition: step 4, only F02_P0 loaded (matchRefId=F02_P0, matchMovId=null)
     const checks = await page.evaluate(() => {
         const done    = [...document.querySelectorAll('#rpanel-content .pre-check.pre-done')]
                             .map(el => el.textContent.trim());
@@ -675,27 +732,26 @@ test('M-02: inputs checklist shows ✓ for ref, ✗ for mov and landmarks', asyn
         `Mov should be ✗, missing items: ${JSON.stringify(checks.missing)}`);
 });
 
-test('M-03: Run Morph button is disabled when Mov not loaded', async () => {
-    // Precondition: step 4, only Ref loaded
+test('M-03: Run Morph button is disabled when Mov not selected', async () => {
+    // Precondition: step 4, only one subject loaded → matchMovId is null
     const disabled = await page.$eval('#btn-run-morph', btn => btn.disabled);
-    assert.ok(disabled, 'Run Morph should be disabled when Mov is not loaded');
+    assert.ok(disabled, 'Run Morph should be disabled when Mov is not selected');
 });
 
 test('M-04: Run Morph enabled after loading both meshes with landmarks', async () => {
-    // Load Mov (F06_P4 has sulci.json, so sulciMov will be auto-discovered)
+    // Load F06_P4 — roster model, no slot tab needed
     await page.click('[data-step="1"]');
     await new Promise(r => setTimeout(r, 200));
-    await clickSlotTab(page, 'mov');
-    await new Promise(r => setTimeout(r, 200));
     await clickPill(page, 'F06_P4');
-    await waitForStatus(page, 'MOV loaded');
+    await waitForStatus(page, 'mesh.ply loaded');
     await new Promise(r => setTimeout(r, 500));
 
     // Navigate to step 4 to re-render the panel
+    // matchRefId auto-set to F02_P0, matchMovId auto-set to F06_P4
     await page.click('[data-step="4"]');
     await new Promise(r => setTimeout(r, 300));
 
-    // Run Morph should now be enabled (both sulciRef + sulciMov are set)
+    // Run Morph should now be enabled (both subjects have spheres + sulci)
     const disabled = await page.$eval('#btn-run-morph', btn => btn.disabled);
     assert.ok(!disabled, 'Run Morph should be enabled when both meshes + landmarks are loaded');
 });
@@ -727,7 +783,7 @@ test('M-05: Run Morph completes, fills progress bar, and renders in viewer', asy
             .some(el => el.textContent.includes('morph.sphere.ply')));
     assert.ok(hasDone, '✓ morph.sphere.ply saved line should appear after morph');
 
-    // Viewer should show non-background pixels (overlay mode loaded)
+    // Viewer should show non-background pixels (morph surface loaded)
     await new Promise(r => setTimeout(r, 500));
     const nonBg = await countNonBgPixelsMain(page);
     assert.ok(nonBg > 0, `Viewer should show mesh after morph, got ${nonBg}/25`);
@@ -741,15 +797,16 @@ test('M-06: After morph, Run Match is enabled and k/nsteps controls present', as
     const hasKSlider = await page.$('#match-k').then(el => !!el);
     assert.ok(hasKSlider, '#match-k slider should be present in match panel');
 
-    // View mode toolbar should have Morph and Overlay buttons enabled
+    // View mode toolbar should have Morph button enabled (retopology blend available)
     const viewBtns = await page.evaluate(() => {
         const btns = [...document.querySelectorAll('.view-row .view-btn')];
         return btns.map(b => ({ label: b.textContent.trim(), disabled: b.disabled }));
     });
     const morphBtn = viewBtns.find(b => b.label === 'Morph');
-    const overlayBtn = viewBtns.find(b => b.label === 'Overlay');
+    const matchViewBtn = viewBtns.find(b => b.label === 'Match');
     assert.ok(morphBtn && !morphBtn.disabled, 'Morph view button should be enabled after morph');
-    assert.ok(overlayBtn && !overlayBtn.disabled, 'Overlay view button should be enabled after morph');
+    assert.ok(matchViewBtn && matchViewBtn.disabled,
+        'Match view button should be disabled until match runs');
 
     // Blend slider (#morph-blend) should be present after retopology
     const hasBlendSlider = await page.$('#morph-blend').then(el => !!el);
@@ -767,4 +824,127 @@ test('M-07: Continue to View button absent before Match completes', async () => 
     // Run Match button should still be enabled
     const matchBtnDisabled = await page.$eval('#btn-run-match', btn => btn.disabled);
     assert.ok(!matchBtnDisabled, 'Run Match button should still be enabled');
+});
+
+// ── Match roster tests (M-08 through M-11) ───────────────────────────────────
+
+test('M-08: Match panel always renders #btn-run-match regardless of roster', async () => {
+    await page.evaluate(() => window.app.goStep(4));
+    await new Promise(r => setTimeout(r, 800));
+
+    const panelEl = await page.$('#btn-run-match');
+    assert.ok(panelEl, 'Match panel should always render #btn-run-match');
+});
+
+test('M-09: Match roster renders rows when match directories exist on disk', async () => {
+    // Seed a completed match directory via the server's file system
+    const matchDir = path.join(
+        PROJECT_ROOT,
+        'data/external/project/data/derived/matches/F06_P4_as_F02_P0'
+    );
+    const fs = await import('node:fs/promises');
+    await fs.mkdir(matchDir, { recursive: true });
+    await fs.writeFile(path.join(matchDir, 'morph.sphere.ply'), 'PLY');
+    await fs.writeFile(path.join(matchDir, 'surf.0.ply'), 'PLY');
+
+    // Re-navigate to step 4 to trigger _loadExistingMatches
+    await page.evaluate(() => window.app.goStep(1));
+    await new Promise(r => setTimeout(r, 200));
+    await page.evaluate(() => window.app.goStep(4));
+    await new Promise(r => setTimeout(r, 1200));
+
+    const rosterRows = await page.$$('.match-roster-row');
+    assert.ok(rosterRows.length >= 1, 'At least one roster row should render');
+
+    const nameText = await rosterRows[0].$eval('.match-roster-name', el => el.textContent);
+    assert.ok(nameText.includes('→'), `Roster name should contain → separator, got: ${nameText}`);
+
+    const loadBtn = await rosterRows[0].$('.roster-load-btn');
+    assert.ok(loadBtn, 'Roster row should have a Load button');
+
+    const delBtn = await rosterRows[0].$('.roster-del-btn');
+    assert.ok(delBtn, 'Roster row should have a Delete (✕) button');
+
+    // Cleanup
+    await fs.rm(matchDir, { recursive: true, force: true });
+});
+
+test('M-10: Clicking Load on roster row populates ref/mov selectors', async () => {
+    // Seed a completed match directory
+    const matchDir = path.join(
+        PROJECT_ROOT,
+        'data/external/project/data/derived/matches/F06_P4_as_F02_P0'
+    );
+    const fs = await import('node:fs/promises');
+    await fs.mkdir(matchDir, { recursive: true });
+    // surf.0.ply must be a valid PLY to load via /api/mesh_raw — use a minimal one
+    const minimalPly = [
+        'ply', 'format ascii 1.0',
+        'element vertex 3', 'property float x', 'property float y', 'property float z',
+        'element face 1', 'property list uchar int vertex_indices',
+        'end_header',
+        '1 0 0', '0 1 0', '0 0 1',
+        '3 0 1 2',
+    ].join('\n');
+    await fs.writeFile(path.join(matchDir, 'morph.sphere.ply'), minimalPly);
+    await fs.writeFile(path.join(matchDir, 'surf.0.ply'), minimalPly);
+
+    await page.evaluate(() => window.app.goStep(1));
+    await new Promise(r => setTimeout(r, 200));
+    await page.evaluate(() => window.app.goStep(4));
+    await new Promise(r => setTimeout(r, 1200));
+
+    const rosterRows = await page.$$('.match-roster-row');
+    assert.ok(rosterRows.length >= 1, 'Roster row should be present');
+
+    const loadBtn = await rosterRows[0].$('.roster-load-btn:not([disabled])');
+    assert.ok(loadBtn, 'Load button should be enabled for a complete match');
+
+    await loadBtn.click();
+    await new Promise(r => setTimeout(r, 1500));
+
+    const refVal = await page.$eval('#match-ref-select', el => el.value);
+    assert.ok(refVal !== '', `Ref picker should be populated after load, got: "${refVal}"`);
+
+    // Cleanup
+    await fs.rm(matchDir, { recursive: true, force: true });
+});
+
+test('M-11: Delete ✕ shows confirmation; Cancel keeps the row', async () => {
+    // Seed a match directory
+    const matchDir = path.join(
+        PROJECT_ROOT,
+        'data/external/project/data/derived/matches/F06_P4_as_F02_P0'
+    );
+    const fs = await import('node:fs/promises');
+    await fs.mkdir(matchDir, { recursive: true });
+    await fs.writeFile(path.join(matchDir, 'morph.sphere.ply'), 'PLY');
+
+    await page.evaluate(() => window.app.goStep(1));
+    await new Promise(r => setTimeout(r, 200));
+    await page.evaluate(() => window.app.goStep(4));
+    await new Promise(r => setTimeout(r, 1200));
+
+    const rosterRows = await page.$$('.match-roster-row');
+    assert.ok(rosterRows.length >= 1, 'Roster row should be present before delete test');
+
+    const delBtn = await rosterRows[0].$('.roster-del-btn');
+    await delBtn.click();
+    await new Promise(r => setTimeout(r, 300));
+
+    const confirmEl = await page.$('.remove-confirm');
+    assert.ok(confirmEl, 'Delete confirmation should appear after clicking ✕');
+
+    const cancelBtn = await page.$('.remove-confirm-no');
+    await cancelBtn.click();
+    await new Promise(r => setTimeout(r, 300));
+
+    const confirmElAfter = await page.$('.remove-confirm');
+    assert.ok(!confirmElAfter, 'Confirmation should disappear after Cancel');
+
+    const rowsAfter = await page.$$('.match-roster-row');
+    assert.ok(rowsAfter.length > 0, 'Row should still be present after Cancel');
+
+    // Cleanup
+    await fs.rm(matchDir, { recursive: true, force: true });
 });

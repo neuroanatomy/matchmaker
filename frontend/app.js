@@ -4,69 +4,62 @@ import { TrajectoryPlayer } from './components/trajectory.js';
 import { StereographicOverlay } from './components/stereographic.js';
 import { StereoView } from './components/stereoview.js';
 
-import { meshUrl, checkHealth, getConfig, apiGet, apiPost, apiPut, pollJob } from './api.js';
+import { meshUrl, checkHealth, getConfig, apiGet, apiPost, apiPut, pollJob, createProject, addSubject, getProject, deleteSubject, getMatches, deleteMatch } from './api.js';
+import { ProjectModal, AddSubjectModal } from './components/projectmodal.js';
 import { resampleMesh, parseRotMat, rotateVertsVR } from './components/morph.js';
 
 window.app = (() => {
     let viewer = null;
     let player = null;
-    let dataRoot = '';     // absolute path to MATCHMAKER_ROOT
-    let activeSlot = 'ref';  // 'ref' | 'mov'
-    let loadedRef = null;
-    let loadedMov = null;
-    let sphereRef = null;   // path to ref sphere PLY (set after spherize)
-    let sphereMov = null;   // path to mov sphere PLY
-    let sulcRef   = null;   // path to ref sulc.txt.gz
-    let sulcMov   = null;   // path to mov sulc.txt.gz
-    let curvRef   = null;   // path to ref curv.txt.gz
-    let curvMov   = null;   // path to mov curv.txt.gz
-    let sulciRef  = null;   // path to ref sulci.json (landmark curves)
-    let sulciMov  = null;   // path to mov sulci.json
-    let rotRef    = null;   // path to ref rotation.txt
-    let rotMov    = null;   // path to mov rotation.txt
+    let dataRoot = '';
 
-    // ── Match step state ─────────────────────────────────────────────────────
-    let matchOutDir      = null;  // auto-derived or user-edited output directory
-    let morphResult      = null;  // {morph_sphere_path} set after morph completes
-    let matchResult      = null;  // {matched_ply, matched_sphere} set after match
-    let matchK           = 100;
-    let matchNsteps      = 1;
-    let matchWSmooth     = 1.0;
-    let matchWDeform     = 10.0;
-    let matchWProject    = 1.0;
-    let matchViewMode    = 'morph'; // 'morph' | 'match'
+    // ── Subject roster ────────────────────────────────────────────────────────
+    let subjects     = {};   // { [id]: { id, path, sphere, sulc, curv, sulci, rot } }
+    let subjectOrder = [];   // IDs in insertion order
+    let activeSubjectId = null;  // selected in Load / Preprocess / Align
+    let viewedSubjectId = null;  // whose mesh is in the 3D viewer
+
+    // viewState keyed by subject ID
+    const viewState = {};    // { [id]: { meshType: null|'native'|'sphere', texType: null|'sulc'|'curv' } }
+
+    // ── Project state ─────────────────────────────────────────────────────────
+    let projectRoot = null;
+
+    // ── Match step ────────────────────────────────────────────────────────────
+    let existingMatches = [];   // [{name, dir, mov_id, ref_id, has_morph, has_match, params}]
+    let matchRefId      = null;
+    let matchMovId      = null;
+    let matchOutDir     = null;
+    let morphResult     = null;
+    let matchResult     = null;
+    let matchK          = 100;
+    let matchNsteps     = 1;
+    let matchWSmooth    = 1.0;
+    let matchWDeform    = 10.0;
+    let matchWProject   = 1.0;
+    let matchViewMode   = 'morph';
     let matchViewOpacity = 0.6;
-    let morphSphereData  = null;   // {vertices, faces} from sbnMorph (in-memory)
-    let morphSurface     = null;   // {refVerts, morphVerts, faces} after retopology
-    let matchSurface     = null;   // {refVerts, matchVerts, faces} after match retopology
-    let morphInterpT     = 0;      // blend slider value 0=ref, 1=mov
+    let morphSphereData = null;
+    let morphSurface    = null;
+    let matchSurface    = null;
+    let morphInterpT    = 0;
 
-    // ── Align step state ──────────────────────────────────────────────────────
-    let alignStereoView = null; // StereoView instance (WebGL flat disc)
-    let alignOverlay    = null; // StereographicOverlay instance
-
-    let alignSlot             = 'ref'; // which slot is currently shown in align
-    let alignViewMode         = 'flat'; // 'flat' | '3d'
+    // ── Align step ────────────────────────────────────────────────────────────
+    let alignSubjectId        = null;
+    let alignInMemory         = {};   // { [id]: overlayJSON }
+    let alignStereoView       = null;
+    let alignOverlay          = null;
+    let alignViewMode         = 'flat';
     let alignWireframe        = false;
-    let alignHas3DOrientation = false; // true after first 3D load; orbit is then preserved on re-entry
-    let alignInMemoryRef      = null;  // unsaved overlay JSON for ref (survives slot switches)
-    let alignInMemoryMov      = null;  // unsaved overlay JSON for mov
+    let alignHas3DOrientation = false;
 
-    // ── Display state (independent of file existence) ─────────────────────────
-    // meshType: null | 'native' | 'sphere'
-    // texType:  null | 'sulc' | 'curv'
-    const viewState = {
-        ref: { meshType: null, texType: null },
-        mov: { meshType: null, texType: null },
-    };
-    let viewedSlot  = null;  // 'ref' | 'mov' — whose mesh is in the viewer
-    let currentStep = 1;     // tracks active step so re-renders go to the right panel
+    let currentStep = 1;
 
     // ── Quick-load datasets ──────────────────────────────────────────────────
     const DATASETS = [
-        { label: 'F02_P0', rel: 'data/external/F02_P0/seg-pial-t2/e2.ply' },
-        { label: 'F06_P4', rel: 'data/external/F06_P4/seg-pial-t2/e2.ply' },
-        { label: 'F10_P8', rel: 'data/external/F10_P8/seg-pial-t2/e2.ply' },
+        { label: 'F02_P0', rel: 'data/external/project/data/raw/meshes/F02_P0/mesh.ply' },
+        { label: 'F06_P4', rel: 'data/external/project/data/raw/meshes/F06_P4/mesh.ply' },
+        { label: 'F10_P8', rel: 'data/external/project/data/raw/meshes/F10_P8/mesh.ply' },
     ];
 
     const TRAJ_DEMO_RELS = [0, 2, 4, 6, 8].map(n => `trajectoryviewer/${n}.ply`);
@@ -74,7 +67,7 @@ window.app = (() => {
     // ── Init ─────────────────────────────────────────────────────────────────
     async function init() {
         viewer = new Viewer3D(document.getElementById('viewer-container'));
-        window._viewer = viewer; // for E2E pixel sampling
+        window._viewer = viewer;
 
         _startHealthPolling();
 
@@ -106,12 +99,9 @@ window.app = (() => {
     // ── Step management ──────────────────────────────────────────────────────
     function goStep(n) {
         const prev = currentStep;
-        // Leaving step 3: save overlay state then tear down
         if (prev === 3 && n !== 3) {
-            if (alignOverlay) {
-                // Persist edits so _runMorph and re-entry to step 3 can use them
-                if (alignSlot === 'ref') alignInMemoryRef = alignOverlay.toJSON();
-                else                     alignInMemoryMov = alignOverlay.toJSON();
+            if (alignOverlay && alignSubjectId) {
+                alignInMemory[alignSubjectId] = alignOverlay.toJSON();
                 alignOverlay.destroy();
                 alignOverlay = null;
             }
@@ -121,19 +111,16 @@ window.app = (() => {
             alignWireframe        = false;
             alignHas3DOrientation = false;
         }
-        // Leaving step 4: clear match overlay from viewer
         if (prev === 4 && n !== 4) {
             viewer.clearAll();
         }
         currentStep = n;
         _activateStep(n);
         renderStep(n);
-        // Entering step 4: populate viewer
         if (n === 4 && prev !== 4) {
             _refreshMatchViewer();
         }
-        // Returning to step 1 or 2 after step 4: restore last single-mesh view
-        if (prev === 4 && (n === 1 || n === 2) && viewedSlot && viewState[viewedSlot].meshType) {
+        if (prev === 4 && (n === 1 || n === 2) && viewedSubjectId && viewState[viewedSubjectId]?.meshType) {
             _refreshViewer({ preserveOrientation: false });
         }
     }
@@ -148,7 +135,6 @@ window.app = (() => {
         const rpanel = document.getElementById('rpanel-content');
         const h2     = document.querySelector('#rpanel h2');
 
-        // Hide trajectory statusbar row unless on step 5
         _showTrajectoryBar(n === 5 && player?.isLoaded);
 
         if (n === 1) {
@@ -162,7 +148,7 @@ window.app = (() => {
             _renderAlignPanel(rpanel);
         } else if (n === 4) {
             h2.textContent = 'Match';
-            _renderMatchPanel(rpanel);
+            _loadExistingMatches().then(() => _renderMatchPanel(rpanel));
         } else if (n === 5) {
             h2.textContent = 'Trajectory';
             _renderTrajectoryPanel(rpanel);
@@ -177,78 +163,100 @@ window.app = (() => {
     function _renderLoadPanel(container) {
         container.innerHTML = '';
 
-        // Tab row
-        const tabs = _el('div', { className: 'slot-tabs' });
-        ['ref', 'mov'].forEach(slot => {
-            const btn = _el('button', { className: `slot-tab${slot === activeSlot ? ' active' : ''}` });
-            btn.textContent = slot === 'ref' ? 'Ref (surface)' : 'Mov (moving)';
-            btn.onclick = async () => {
-                activeSlot = slot;
-                const slotLoaded = slot === 'ref' ? loadedRef : loadedMov;
-                if (slotLoaded && viewedSlot !== slot) {
-                    viewedSlot = slot;
-                    if (!viewState[slot].meshType) viewState[slot].meshType = 'native';
-                    await _refreshViewer({ preserveOrientation: true });
-                }
-                _renderLoadPanel(container);
-            };
-            tabs.appendChild(btn);
-        });
-        container.appendChild(tabs);
+        // Subject roster
+        if (subjectOrder.length > 0) {
+            const roster = _el('div', { className: 'subject-roster' });
+            subjectOrder.forEach(id => {
+                const s   = subjects[id];
+                const row = _el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
+                row.dataset.subjectId = id;
 
-        // Status line
-        const loaded = activeSlot === 'ref' ? loadedRef : loadedMov;
-        const statusEl = _el('div', { className: 'slot-status' });
-        statusEl.textContent = loaded
-            ? `✓ ${loaded.split('/').pop()}`
-            : `No ${activeSlot} loaded`;
-        container.appendChild(statusEl);
+                const info = _el('div', { className: 'subject-row-info' });
 
-        // ── View controls: mesh selector + texture toggles ────────────────────
-        if (loaded) {
-            const slot   = activeSlot;
-            const vs     = viewState[slot];
-            const isView = viewedSlot === slot;
-            const sphere = slot === 'ref' ? sphereRef : sphereMov;
-            const sulc   = slot === 'ref' ? sulcRef   : sulcMov;
-            const curv   = slot === 'ref' ? curvRef   : curvMov;
+                const idEl = _el('span', { className: 'subject-row-id' });
+                idEl.textContent = id;
+                info.appendChild(idEl);
+
+                const fileEl = _el('span', { className: 'subject-row-file' });
+                fileEl.textContent = s.path ? '  ' + s.path.split('/').pop() : '';
+                info.appendChild(fileEl);
+
+                const dots = _el('span', { className: 'subject-dots' });
+                const _dot = (present, title) => {
+                    const d = _el('span', { className: `dot${present ? ' dot-on' : ''}`, title });
+                    d.textContent = '●';
+                    return d;
+                };
+                dots.appendChild(_dot(!!s.sphere,          'sphere'));
+                dots.appendChild(_dot(!!(s.curv || s.sulc), 'maps'));
+                dots.appendChild(_dot(!!s.sulci,            'landmarks'));
+                info.appendChild(dots);
+
+                row.appendChild(info);
+
+                const rmBtn = _el('button', { className: 'remove-btn' });
+                rmBtn.textContent = '×';
+                rmBtn.title = `Remove ${id}`;
+                rmBtn.onclick = e => { e.stopPropagation(); _confirmRemoveSubject(id, row); };
+                row.appendChild(rmBtn);
+
+                row.onclick = async () => {
+                    activeSubjectId = id;
+                    if (viewedSubjectId !== id) {
+                        viewedSubjectId = id;
+                        if (!viewState[id]) viewState[id] = { meshType: 'native', texType: null };
+                        else if (!viewState[id].meshType) viewState[id].meshType = 'native';
+                        await _refreshViewer({ preserveOrientation: true });
+                    }
+                    _renderLoadPanel(container);
+                };
+
+                roster.appendChild(row);
+            });
+            container.appendChild(roster);
+        }
+
+        // View controls for active subject
+        if (activeSubjectId && subjects[activeSubjectId]) {
+            const id  = activeSubjectId;
+            const s   = subjects[id];
+            const vs  = viewState[id] || (viewState[id] = { meshType: null, texType: null });
+            const isView = viewedSubjectId === id;
 
             const viewSec = _el('div', { className: 'view-section' });
 
-            // Mesh options (radio)
             const nativeEl = _el('div', { className: 'sph-item sph-clickable' });
             const nativeOn = isView && vs.meshType === 'native';
             nativeEl.classList.toggle('sph-item-active', nativeOn);
-            nativeEl.textContent = (nativeOn ? '▶ ' : '  ') + loaded.split('/').pop();
-            nativeEl.onclick = () => _viewMesh(slot, 'native');
+            nativeEl.textContent = (nativeOn ? '▶ ' : '  ') + s.path.split('/').pop();
+            nativeEl.onclick = () => _viewMesh(id, 'native');
             viewSec.appendChild(nativeEl);
 
-            if (sphere) {
+            if (s.sphere) {
                 const sphereEl = _el('div', { className: 'sph-item sph-clickable' });
                 const sphereOn = isView && vs.meshType === 'sphere';
                 sphereEl.classList.toggle('sph-item-active', sphereOn);
-                sphereEl.textContent = (sphereOn ? '▶ ' : '  ') + sphere.split('/').pop();
-                sphereEl.onclick = () => _viewMesh(slot, 'sphere');
+                sphereEl.textContent = (sphereOn ? '▶ ' : '  ') + s.sphere.split('/').pop();
+                sphereEl.onclick = () => _viewMesh(id, 'sphere');
                 viewSec.appendChild(sphereEl);
             }
 
-            // Texture options (checkbox, mutually exclusive)
-            if (sulc || curv) {
+            if (s.sulc || s.curv) {
                 viewSec.appendChild(_el('div', { className: 'sph-divider' }));
-                if (sulc) {
+                if (s.sulc) {
                     const el = _el('div', { className: 'sph-item sph-clickable' });
                     const on = vs.texType === 'sulc';
                     el.classList.toggle('sph-tex-active', on);
                     el.textContent = (on ? '☑ ' : '☐ ') + 'sulcal depth';
-                    el.onclick = () => _toggleTexture(slot, 'sulc');
+                    el.onclick = () => _toggleTexture(id, 'sulc');
                     viewSec.appendChild(el);
                 }
-                if (curv) {
+                if (s.curv) {
                     const el = _el('div', { className: 'sph-item sph-clickable' });
                     const on = vs.texType === 'curv';
                     el.classList.toggle('sph-tex-active', on);
                     el.textContent = (on ? '☑ ' : '☐ ') + 'curvature';
-                    el.onclick = () => _toggleTexture(slot, 'curv');
+                    el.onclick = () => _toggleTexture(id, 'curv');
                     viewSec.appendChild(el);
                 }
             }
@@ -265,7 +273,7 @@ window.app = (() => {
         DATASETS.forEach(ds => {
             const btn = _el('button', { className: 'pill-btn' });
             btn.textContent = ds.label;
-            btn.onclick = () => _loadSlot(dataRoot + '/' + ds.rel);
+            btn.onclick = () => _loadSubject(dataRoot + '/' + ds.rel);
             pills.appendChild(btn);
         });
         container.appendChild(pills);
@@ -274,135 +282,314 @@ window.app = (() => {
         sep.textContent = '— or browse —';
         container.appendChild(sep);
 
-        // File browser
         const fbContainer = _el('div', { className: 'fb-container' });
         container.appendChild(fbContainer);
 
+        const addBtn = _el('button', { className: 'load-btn' });
+        addBtn.textContent = '+ Add mesh';
+        addBtn.disabled = true;
+
         const fb = new FileBrowser(fbContainer, {
-            filter: name => name.endsWith('.ply') || name.endsWith('.ply.gz'),
+            filter: name => name.endsWith('.ply') || name.endsWith('.ply.gz') || name === 'project.json',
             onSelect: path => {
-                loadBtn.disabled = false;
-                loadBtn.dataset.path = path;
+                addBtn.disabled = false;
+                addBtn.dataset.path = path;
+                addBtn.textContent = path.endsWith('/project.json') ? 'Open project' : '+ Add mesh';
             },
         });
         fb.navigate(dataRoot || null);
 
-        // Load button
-        const loadBtn = _el('button', { className: 'load-btn' });
-        loadBtn.textContent = `Load as ${activeSlot.toUpperCase()}`;
-        loadBtn.disabled = true;
-        loadBtn.onclick = () => _loadSlot(loadBtn.dataset.path);
-        container.appendChild(loadBtn);
+        addBtn.onclick = () => _addMeshFromBrowser(addBtn.dataset.path);
+        container.appendChild(addBtn);
     }
 
-    async function _loadSlot(absPath) {
+    async function _confirmRemoveSubject(id, rowEl) {
+        const existing = rowEl.querySelector('.remove-confirm');
+        if (existing) { existing.remove(); return; }
+
+        const confirmEl = _el('div', { className: 'remove-confirm' });
+        confirmEl.textContent = `Remove ${id} and all derived files? `;
+
+        const yesBtn = _el('button', { className: 'remove-confirm-yes' });
+        yesBtn.textContent = 'Remove';
+        yesBtn.onclick = async e => {
+            e.stopPropagation();
+            try {
+                if (projectRoot) await deleteSubject({ project_root: projectRoot, subject_id: id });
+            } catch { /* still remove from local state */ }
+
+            delete subjects[id];
+            delete viewState[id];
+            delete alignInMemory[id];
+            subjectOrder = subjectOrder.filter(s => s !== id);
+            if (activeSubjectId === id) activeSubjectId = subjectOrder[0] || null;
+            if (viewedSubjectId === id) { viewedSubjectId = null; viewer.clearAll(); }
+            if (alignSubjectId  === id) alignSubjectId = null;
+            if (matchRefId      === id) { matchRefId = null; matchOutDir = null; morphResult = null; matchResult = null; morphSurface = null; matchSurface = null; }
+            if (matchMovId      === id) { matchMovId = null; matchOutDir = null; morphResult = null; matchResult = null; morphSurface = null; matchSurface = null; }
+
+            const c = document.getElementById('rpanel-content');
+            if (c) renderStep(currentStep);
+            _setStatus(`Removed ${id}`);
+        };
+        confirmEl.appendChild(yesBtn);
+
+        const noBtn = _el('button', { className: 'remove-confirm-no' });
+        noBtn.textContent = 'Cancel';
+        noBtn.onclick = e => { e.stopPropagation(); confirmEl.remove(); };
+        confirmEl.appendChild(noBtn);
+
+        rowEl.appendChild(confirmEl);
+    }
+
+    async function _loadSubject(absPath) {
         if (!absPath) return;
-        const slot = activeSlot;
         const name = absPath.split('/').pop();
         _setStatus(`Loading ${name}…`);
         try {
-            // Clear stale companion state for this slot
-            if (slot === 'ref') { loadedRef = null; sphereRef = null; sulcRef = null; curvRef = null; sulciRef = null; rotRef = null; viewState.ref = { meshType: null, texType: null }; alignInMemoryRef = null; }
-            else                { loadedMov = null; sphereMov = null; sulcMov = null; curvMov = null; sulciMov = null; rotMov = null; viewState.mov = { meshType: null, texType: null }; alignInMemoryMov = null; }
-            matchOutDir = null; morphResult = null; matchResult = null; morphSphereData = null; matchViewMode = 'morph'; morphSurface = null; matchSurface = null; morphInterpT = 0;
-            if (viewedSlot === slot) viewedSlot = null;
-
-            if (slot === 'ref') loadedRef = absPath;
-            else                loadedMov = absPath;
-
-            // Auto-discover pre-existing companion files
-            const companions = await apiGet('/api/companions', { path: absPath }).catch(() => null);
-            if (companions) {
-                if (slot === 'ref') {
-                    if (companions.sphere)       sphereRef = companions.sphere;
-                    if (companions.sulc)         sulcRef   = companions.sulc;
-                    if (companions.curv)         curvRef   = companions.curv;
-                    if (companions.sulci_json)   sulciRef  = companions.sulci_json;
-                    if (companions.rotation_txt) rotRef    = companions.rotation_txt;
-                } else {
-                    if (companions.sphere)       sphereMov = companions.sphere;
-                    if (companions.sulc)         sulcMov   = companions.sulc;
-                    if (companions.curv)         curvMov   = companions.curv;
-                    if (companions.sulci_json)   sulciMov  = companions.sulci_json;
-                    if (companions.rotation_txt) rotMov    = companions.rotation_txt;
-                }
+            // Detect project from path: .../data/raw/meshes/<id>/mesh.ply
+            let id = null;
+            const projMatch = absPath.match(/^(.+)\/data\/raw\/meshes\/([^/]+)\/mesh\.ply$/);
+            if (projMatch) {
+                if (!projectRoot) projectRoot = projMatch[1];
+                id = projMatch[2];
+            } else {
+                id = _guessSubjectId(absPath);
             }
 
-            // Show the native mesh immediately — camera resets (fresh load)
-            viewState[slot].meshType = 'native';
-            viewedSlot = slot;
-            await _refreshViewer();
+            // Ensure unique ID if collision
+            if (subjects[id] && subjects[id].path !== absPath) {
+                let n = 2;
+                while (subjects[`${id}_${n}`]) n++;
+                id = `${id}_${n}`;
+            }
 
-            const found = [companions?.sphere && 'sphere', companions?.sulc && 'sulcal depth', companions?.curv && 'curvature']
-                .filter(Boolean);
-            const hint = found.length ? ` — ${found.join(', ')} available` : '';
-            _setStatus(`${slot.toUpperCase()} loaded: ${name}${hint}`);
-            _renderLoadPanel(document.getElementById('rpanel-content'));
+            if (!subjects[id]) {
+                subjects[id] = { id, path: absPath, sphere: null, sulc: null, curv: null, sulci: null, rot: null };
+                subjectOrder.push(id);
+            } else {
+                subjects[id].path = absPath;
+            }
+
+            viewState[id] = { meshType: 'native', texType: null };
+            activeSubjectId = id;
+            viewedSubjectId = id;
+
+            // Auto-discover companion files
+            const compParams = { path: absPath, subject_id: id };
+            if (projectRoot) compParams.project_root = projectRoot;
+            const comp = await apiGet('/api/companions', compParams).catch(() => ({}));
+            subjects[id].sphere = comp.sphere        || null;
+            subjects[id].sulc   = comp.sulc          || null;
+            subjects[id].curv   = comp.curv          || null;
+            subjects[id].sulci  = comp.sulci_json    || null;
+            subjects[id].rot    = comp.rotation_txt  || null;
+
+            await _refreshViewer({ preserveOrientation: false });
+
+            const found = [];
+            if (comp.sphere)       found.push('sphere');
+            if (comp.sulc)         found.push('sulcal depth');
+            if (comp.curv)         found.push('curvature');
+            if (comp.sulci_json)   found.push('landmarks');
+            if (comp.rotation_txt) found.push('rotation');
+            _setStatus(`${name} loaded${found.length ? ' — ' + found.join(', ') + ' available' : ''}`);
+
+            if (currentStep === 1) {
+                const c = document.getElementById('rpanel-content');
+                if (c) _renderLoadPanel(c);
+            } else {
+                renderStep(currentStep);
+            }
         } catch (e) {
-            _setStatus(`Error: ${e.message}`);
+            _setStatus(`Load error: ${e.message}`);
         }
+    }
+
+    async function _loadProjectFile(projectJsonPath) {
+        const root = projectJsonPath.replace(/\/project\.json$/, '');
+        _setStatus('Loading project…');
+        try {
+            const proj = await getProject(root);
+            projectRoot = root;
+            const ids = proj.subjects || [];
+            if (ids.length === 0) { _setStatus('Project has no subjects'); return; }
+            for (const subjectId of ids) {
+                await _loadSubject(`${root}/data/raw/meshes/${subjectId}/mesh.ply`);
+            }
+            _setStatus(`Project loaded — ${ids.length} subject${ids.length > 1 ? 's' : ''}`);
+        } catch (e) {
+            _setStatus(`Project load error: ${e.message}`);
+        }
+    }
+
+    async function _addMeshFromBrowser(path) {
+        if (!path) return;
+
+        // project.json selected — load entire project
+        if (path.endsWith('/project.json')) {
+            await _loadProjectFile(path);
+            return;
+        }
+
+        // Path already inside a project structure — just load it
+        const projMatch = path.match(/^(.+)\/data\/raw\/meshes\/([^/]+)\/mesh\.ply$/);
+        if (projMatch) {
+            await _loadSubject(path);
+            return;
+        }
+
+        if (!projectRoot) {
+            // No project yet — show create dialog
+            await new Promise(resolve => {
+                new ProjectModal(document.body, {
+                    meshPath: path,
+                    onConfirm: async ({ projectRoot: root, subjectId }) => {
+                        try {
+                            _setStatus('Creating project…');
+                            await createProject({ root_dir: root, ref_id: subjectId, ref_source_path: path });
+                            projectRoot = root;
+                            await _loadSubject(`${root}/data/raw/meshes/${subjectId}/mesh.ply`);
+                            _setStatus('Project created');
+                        } catch (e) {
+                            _setStatus(`Project creation failed: ${e.message}`);
+                        }
+                        resolve();
+                    },
+                    onCancel: () => resolve(),
+                });
+            });
+        } else {
+            // Project active — add this external mesh as a new subject
+            await new Promise(resolve => {
+                new AddSubjectModal(document.body, {
+                    slot: 'ref',
+                    meshPath: path,
+                    projectRoot,
+                    onConfirm: async ({ subjectId }) => {
+                        try {
+                            _setStatus(`Adding ${subjectId} to project…`);
+                            await addSubject({ project_root: projectRoot, subject_id: subjectId, source_path: path });
+                            await _loadSubject(`${projectRoot}/data/raw/meshes/${subjectId}/mesh.ply`);
+                        } catch (e) {
+                            _setStatus(`Failed to add subject: ${e.message}`);
+                        }
+                        resolve();
+                    },
+                    onCancel: () => resolve(),
+                });
+            });
+        }
+    }
+
+    function _guessSubjectId(absPath) {
+        if (!absPath) return 'subject';
+        const GENERIC = new Set([
+            'seg-pial-t2', 'seg-pial', 'seg-white', 'surfaces', 'surface',
+            'external', 'data', 'landmarks', 'meshes', 'raw', 'derived',
+        ]);
+        const parts = absPath.split('/').filter(Boolean);
+        for (let i = parts.length - 2; i >= 0; i--) {
+            if (!GENERIC.has(parts[i])) return parts[i];
+        }
+        return parts[parts.length - 2] || 'subject';
+    }
+
+    function _annotationsDir(id) {
+        return `${projectRoot}/data/derived/annotations/${id}`;
     }
 
     // ── Public shortcut used by E2E tests ────────────────────────────────────
     async function loadMeshByPath(absPath) {
-        activeSlot = 'ref';
-        await _loadSlot(absPath);
+        await _loadSubject(absPath);
     }
 
     // ── Step 2 — Preprocess ──────────────────────────────────────────────────
     function _renderPreprocessPanel(container) {
         container.innerHTML = '';
 
-        const rows = [
-            { label: 'Ref', path: loadedRef, sphere: sphereRef, curv: curvRef, sulc: sulcRef, slot: 'ref' },
-            { label: 'Mov', path: loadedMov, sphere: sphereMov, curv: curvMov, sulc: sulcMov, slot: 'mov' },
-        ];
+        if (subjectOrder.length === 0) {
+            const msg = _el('p', { className: 'coming-soon' });
+            msg.textContent = 'No meshes loaded — go to Load (step 1) first.';
+            container.appendChild(msg);
+            return;
+        }
 
-        rows.forEach(({ label, path, sphere, curv, sulc, slot }) => {
-            const section = _el('div', { className: 'sph-section' });
+        // Subject roster with inline status chips
+        const roster = _el('div', { className: 'subject-roster' });
+        subjectOrder.forEach(id => {
+            const s   = subjects[id];
+            const row = _el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
+            row.dataset.subjectId = id;
 
-            // Header: label + filename
-            const hdr = _el('div', { className: 'pre-header' });
-            const lbl = _el('span', { className: 'sph-label' });
-            lbl.textContent = label;
-            hdr.appendChild(lbl);
-            const fname = _el('span', { className: 'pre-filename' });
-            fname.textContent = path ? '  ' + path.split('/').pop() : '  — not loaded —';
-            hdr.appendChild(fname);
-            section.appendChild(hdr);
+            const info = _el('div', { className: 'subject-row-info' });
+            const idEl = _el('span', { className: 'subject-row-id' });
+            idEl.textContent = id;
+            info.appendChild(idEl);
 
-            // Checklist
-            section.appendChild(_preItem('Sphere',       !!sphere));
-            section.appendChild(_preItem('Curvature',    !!curv));
-            section.appendChild(_preItem('Sulcal depth', !!sulc));
+            const chips = _el('span', { className: 'pre-chips' });
+            const _chip = (label, done) => {
+                const c = _el('span', { className: `pre-chip ${done ? 'pre-done' : 'pre-missing'}` });
+                c.textContent = (done ? '✓' : '✗') + ' ' + label;
+                return c;
+            };
+            chips.appendChild(_chip('sph', !!s.sphere));
+            chips.appendChild(_chip('maps', !!(s.curv && s.sulc)));
+            info.appendChild(chips);
 
-            // Action buttons (only for what's missing)
-            if (path) {
-                if (!sphere) {
-                    const bar = _el('div', { className: 'progress-bar-wrap' });
-                    const fill = _el('div', { className: 'progress-bar' });
-                    bar.appendChild(fill); bar.style.display = 'none';
-                    section.appendChild(bar);
-                    const btn = _el('button', { className: 'load-btn' });
-                    btn.textContent = `Spherize ${label}`;
-                    btn.onclick = () => _spherize(slot, path, fill, btn);
-                    section.appendChild(btn);
-                }
-                if (!curv || !sulc) {
-                    const bar = _el('div', { className: 'progress-bar-wrap' });
-                    const fill = _el('div', { className: 'progress-bar' });
-                    bar.appendChild(fill); bar.style.display = 'none';
-                    section.appendChild(bar);
-                    const btn = _el('button', { className: 'load-btn' });
-                    btn.textContent = 'Compute maps';
-                    btn.onclick = () => _computeCurvature(slot, path, fill, btn);
-                    section.appendChild(btn);
-                }
-            }
-
-            container.appendChild(section);
-            container.appendChild(_el('div', { className: 'sph-divider' }));
+            row.appendChild(info);
+            row.onclick = () => {
+                activeSubjectId = id;
+                _renderPreprocessPanel(container);
+            };
+            roster.appendChild(row);
         });
+        container.appendChild(roster);
+        container.appendChild(_el('div', { className: 'sph-divider' }));
+
+        // Detail section for active subject
+        if (!activeSubjectId || !subjects[activeSubjectId]) return;
+
+        const id  = activeSubjectId;
+        const s   = subjects[id];
+
+        const section = _el('div', { className: 'sph-section' });
+
+        const hdr = _el('div', { className: 'pre-header' });
+        const lbl = _el('span', { className: 'sph-label' });
+        lbl.textContent = id;
+        hdr.appendChild(lbl);
+        const fname = _el('span', { className: 'pre-filename' });
+        fname.textContent = s.path ? '  ' + s.path.split('/').pop() : '';
+        hdr.appendChild(fname);
+        section.appendChild(hdr);
+
+        section.appendChild(_preItem('Sphere',       !!s.sphere));
+        section.appendChild(_preItem('Curvature',    !!s.curv));
+        section.appendChild(_preItem('Sulcal depth', !!s.sulc));
+
+        if (!s.sphere) {
+            const bar  = _el('div', { className: 'progress-bar-wrap' });
+            const fill = _el('div', { className: 'progress-bar' });
+            bar.appendChild(fill); bar.style.display = 'none';
+            section.appendChild(bar);
+            const btn = _el('button', { className: 'load-btn' });
+            btn.textContent = 'Spherize';
+            btn.onclick = () => _spherize(id, fill, btn);
+            section.appendChild(btn);
+        }
+        if (!s.curv || !s.sulc) {
+            const bar  = _el('div', { className: 'progress-bar-wrap' });
+            const fill = _el('div', { className: 'progress-bar' });
+            bar.appendChild(fill); bar.style.display = 'none';
+            section.appendChild(bar);
+            const btn = _el('button', { className: 'load-btn' });
+            btn.textContent = 'Compute maps';
+            btn.onclick = () => _computeCurvature(id, fill, btn);
+            section.appendChild(btn);
+        }
+
+        container.appendChild(section);
     }
 
     function _preItem(label, done) {
@@ -411,33 +598,34 @@ window.app = (() => {
         return el;
     }
 
-    async function _viewMesh(slot, meshType) {
-        if (viewedSlot === slot && viewState[slot].meshType === meshType) return;
-        viewedSlot = slot;
-        viewState[slot].meshType = meshType;
+    async function _viewMesh(id, meshType) {
+        if (viewedSubjectId === id && viewState[id]?.meshType === meshType) return;
+        viewedSubjectId = id;
+        if (!viewState[id]) viewState[id] = { meshType: null, texType: null };
+        viewState[id].meshType = meshType;
         await _refreshViewer();
         renderStep(currentStep);
     }
 
-    async function _toggleTexture(slot, texType) {
-        viewState[slot].texType = viewState[slot].texType === texType ? null : texType;
-        if (viewedSlot === slot) await _refreshViewer({ preserveOrientation: true });
+    async function _toggleTexture(id, texType) {
+        if (!viewState[id]) viewState[id] = { meshType: 'native', texType: null };
+        viewState[id].texType = viewState[id].texType === texType ? null : texType;
+        if (viewedSubjectId === id) await _refreshViewer({ preserveOrientation: true });
         renderStep(currentStep);
     }
 
     async function _refreshViewer({ preserveOrientation = false } = {}) {
-        if (!viewedSlot || !viewState[viewedSlot].meshType) return;
-        const slot = viewedSlot;
-        const meshPath = viewState[slot].meshType === 'sphere'
-            ? (slot === 'ref' ? sphereRef : sphereMov)
-            : (slot === 'ref' ? loadedRef : loadedMov);
+        if (!viewedSubjectId || !viewState[viewedSubjectId]?.meshType) return;
+        const id      = viewedSubjectId;
+        const s       = subjects[id];
+        if (!s) return;
+        const vs      = viewState[id];
+        const meshPath = vs.meshType === 'sphere' ? s.sphere : s.path;
         if (!meshPath) return;
 
-        const texType = viewState[slot].texType;
+        const texType = vs.texType;
         if (texType === 'sulc' || texType === 'curv') {
-            const scalarPath = texType === 'sulc'
-                ? (slot === 'ref' ? sulcRef : sulcMov)
-                : (slot === 'ref' ? curvRef : curvMov);
+            const scalarPath = texType === 'sulc' ? s.sulc : s.curv;
             if (scalarPath) {
                 try {
                     const scalars = await apiGet('/api/scalar', { path: scalarPath });
@@ -451,17 +639,19 @@ window.app = (() => {
         _setStatus(meshPath.split('/').pop());
     }
 
-    async function _spherize(slot, path, fillEl, btn) {
+    async function _spherize(id, fillEl, btn) {
         btn.disabled = true;
+        const s    = subjects[id];
+        const body = { path: s.path };
+        if (projectRoot) body.out_dir = _annotationsDir(id);
         fillEl.parentElement.style.display = 'block';
-        _setStatus(`Spherizing ${path.split('/').pop()}…`);
+        _setStatus(`Spherizing ${s.path.split('/').pop()}…`);
         try {
-            const { job_id } = await apiPost('/api/spherize', { path });
+            const { job_id } = await apiPost('/api/spherize', body);
             const result = await pollJob(job_id, {
                 onProgress: p => { fillEl.style.width = `${Math.round(p * 100)}%`; },
             });
-            if (slot === 'ref') sphereRef = result.sphere_path;
-            else               sphereMov = result.sphere_path;
+            subjects[id].sphere = result.sphere_path;
             _setStatus(`Sphere ready: ${result.sphere_path.split('/').pop()}`);
             renderStep(currentStep);
         } catch (e) {
@@ -470,17 +660,20 @@ window.app = (() => {
         }
     }
 
-    async function _computeCurvature(slot, path, fillEl, btn) {
+    async function _computeCurvature(id, fillEl, btn) {
         btn.disabled = true;
+        const s    = subjects[id];
+        const body = { path: s.path };
+        if (projectRoot) body.out_dir = _annotationsDir(id);
         fillEl.parentElement.style.display = 'block';
-        _setStatus(`Computing maps for ${path.split('/').pop()}…`);
+        _setStatus(`Computing maps for ${s.path.split('/').pop()}…`);
         try {
-            const { job_id } = await apiPost('/api/curvature', { path });
+            const { job_id } = await apiPost('/api/curvature', body);
             const result = await pollJob(job_id, {
                 onProgress: p => { fillEl.style.width = `${Math.round(p * 100)}%`; },
             });
-            if (slot === 'ref') { curvRef = result.curv_path; sulcRef = result.sulc_path; }
-            else                { curvMov = result.curv_path; sulcMov = result.sulc_path; }
+            subjects[id].curv = result.curv_path;
+            subjects[id].sulc = result.sulc_path;
             _setStatus(`Maps ready: ${result.sulc_path.split('/').pop()}`);
             renderStep(currentStep);
         } catch (e) {
@@ -489,43 +682,42 @@ window.app = (() => {
         }
     }
 
-    // ── Step 3 — Align (stereographic landmark drawing) ─────────────────────
+    // ── Step 3 — Align ───────────────────────────────────────────────────────
 
-    async function _activateAlign(slot) {
-        const prevSlot = alignSlot;   // capture before updating
-        alignSlot             = slot;
-        alignHas3DOrientation = false; // new slot → fresh 3D camera on first entry
+    async function _activateAlign(id) {
+        const prevId = alignSubjectId;
+        alignSubjectId        = id;
+        alignHas3DOrientation = false;
         if (currentStep !== 3) return;
 
-        // No-op if this slot is already fully set up
-        if (slot === prevSlot && alignOverlay && alignStereoView) return;
+        if (id === prevId && alignOverlay && alignStereoView) return;
 
-        // Save current overlay state before destroying — preserves unsaved edits
+        viewer.clearAll();
+
+        const targetMode = alignViewMode;
+        if (alignViewMode === '3d') alignViewMode = 'flat';
+
         if (alignOverlay) {
-            if (prevSlot === 'ref') alignInMemoryRef = alignOverlay.toJSON();
-            else                    alignInMemoryMov = alignOverlay.toJSON();
+            if (prevId) alignInMemory[prevId] = alignOverlay.toJSON();
             alignOverlay.destroy();
             alignOverlay = null;
         }
         if (alignStereoView) { alignStereoView.destroy(); alignStereoView = null; }
 
-        const sphere = slot === 'ref' ? sphereRef : sphereMov;
-        const sulc   = slot === 'ref' ? sulcRef   : sulcMov;
-
-        if (!sphere) {
-            _setStatus(`No sphere for ${slot.toUpperCase()} — run Preprocess first`);
+        const s = subjects[id];
+        if (!s?.sphere) {
+            _setStatus(`No sphere for ${id} — run Preprocess first`);
             renderStep(currentStep);
             return;
         }
 
-        const rotPath = slot === 'ref' ? rotRef : rotMov;
-        let initR = null;  // 3×3 rotation matrix for StereoView (R = R_cam^T)
-        if (rotPath) {
-            const resp = await apiGet('/api/file', { path: rotPath }).catch(() => null);
+        let initR = null;
+        if (s.rot) {
+            const resp = await apiGet('/api/file', { path: s.rot }).catch(() => null);
             if (resp?.content) {
                 try {
-                    const R9 = parseRotMat(resp.content);   // flat row-major R_cam
-                    initR = [                                // StereoView uses R_cam^T
+                    const R9 = parseRotMat(resp.content);
+                    initR = [
                         [R9[0], R9[3], R9[6]],
                         [R9[1], R9[4], R9[7]],
                         [R9[2], R9[5], R9[8]],
@@ -535,23 +727,21 @@ window.app = (() => {
         }
         if (currentStep !== 3) return;
 
-        _setStatus(`Loading sphere…`);
+        _setStatus('Loading sphere…');
         try {
-            const scalars = sulc ? await apiGet('/api/scalar', { path: sulc }) : null;
+            const scalars = s.sulc ? await apiGet('/api/scalar', { path: s.sulc }) : null;
             if (currentStep !== 3) return;
 
-            // Create WebGL stereo view (replaces Three.js loadMeshStereo)
             const container = document.getElementById('viewer-container');
             alignStereoView = new StereoView(container);
-            window._alignStereoView = alignStereoView; // exposed for E2E tests
-            await alignStereoView.load(sphere, scalars, initR);
+            window._alignStereoView = alignStereoView;
+            await alignStereoView.load(s.sphere, scalars, initR);
             if (currentStep !== 3) { alignStereoView.destroy(); alignStereoView = null; return; }
 
-            // Keep rotation sliders in sync when user drags the disc
             alignStereoView.onRotationChange(() => {
                 const { alpha, beta, gamma } = alignStereoView.getEulerZYX();
-                const update = (id, val) => {
-                    const el = document.getElementById(id);
+                const update = (domId, val) => {
+                    const el = document.getElementById(domId);
                     if (!el) return;
                     el.value = val;
                     el.setAttribute('aria-valuenow', val);
@@ -563,19 +753,14 @@ window.app = (() => {
                 update('rot-tilth', gamma);
             });
 
-            // Paper.js landmark overlay on top of StereoView canvas
             alignOverlay = new StereographicOverlay(container, alignStereoView);
 
-            // Keep alignInMemoryRef/Mov always fresh after every edit gesture
             alignOverlay.onChange = () => {
-                if (alignSlot === 'ref') alignInMemoryRef = alignOverlay.toJSON();
-                else                     alignInMemoryMov = alignOverlay.toJSON();
+                if (alignSubjectId) alignInMemory[alignSubjectId] = alignOverlay.toJSON();
             };
 
-            // Restore from in-memory state (unsaved edits) if available,
-            // otherwise fall back to the last saved sulci.json on disk.
-            const inMem     = slot === 'ref' ? alignInMemoryRef : alignInMemoryMov;
-            const sulciPath = slot === 'ref' ? sulciRef : sulciMov;
+            const inMem     = alignInMemory[id];
+            const sulciPath = s.sulci;
             if (inMem) {
                 alignOverlay.fromJSON(inMem);
                 _setStatus(`Stereo view ready — ${alignOverlay.regions.length} landmarks restored`);
@@ -584,19 +769,19 @@ window.app = (() => {
                     const data = await apiGet('/api/file', { path: sulciPath });
                     alignOverlay.fromJSON(data);
                     _setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
-                } catch { /* no prior sulci.json — start fresh */ }
+                } catch { /* no prior sulci.json */ }
             }
 
-            if (!inMem && !sulciPath) _setStatus(`Stereo view ready — draw landmarks`);
+            if (!inMem && !sulciPath) _setStatus('Stereo view ready — draw landmarks');
         } catch (e) {
             _setStatus(`Align error: ${e.message}`);
             return;
         }
 
         if (currentStep !== 3) return;
+        renderStep(currentStep);
 
-        // Re-render the panel controls after async setup is complete
-        if (currentStep === 3) renderStep(currentStep);
+        if (targetMode === '3d') await _switchViewMode('3d');
     }
 
     async function _switchViewMode(mode) {
@@ -606,10 +791,9 @@ window.app = (() => {
         if (mode === '3d') {
             alignStereoView._canvas.style.display = 'none';
             alignOverlay._canvas.style.display    = 'none';
-            const native = alignSlot === 'ref' ? loadedRef : loadedMov;
-            const sulc   = alignSlot === 'ref' ? sulcRef   : sulcMov;
-            const curv   = alignSlot === 'ref' ? curvRef   : curvMov;
-            const scalar = sulc || curv;
+            const s      = alignSubjectId ? subjects[alignSubjectId] : null;
+            const native = s?.path;
+            const scalar = s?.sulc || s?.curv;
             _setStatus('Loading 3D view…');
             try {
                 const scalars = scalar
@@ -623,7 +807,6 @@ window.app = (() => {
                 }
                 alignHas3DOrientation = true;
                 if (alignWireframe) viewer.setWireframe(true);
-                // Project landmarks from sphere space onto the native mesh surface
                 if (alignOverlay?.regions.length > 0) {
                     const regions3d   = alignOverlay.getRegions3DSampled(10);
                     const nativeVerts = viewer.getMainMeshVertexArray();
@@ -663,18 +846,49 @@ window.app = (() => {
     function _renderAlignPanel(container) {
         container.innerHTML = '';
 
-        // Slot tabs
-        const tabs = _el('div', { className: 'slot-tabs' });
-        ['ref', 'mov'].forEach(slot => {
-            const btn = _el('button', { className: `slot-tab${slot === alignSlot ? ' active' : ''}` });
-            btn.textContent = slot === 'ref' ? 'Ref' : 'Mov';
-            btn.onclick = () => _activateAlign(slot);
-            tabs.appendChild(btn);
+        if (subjectOrder.length === 0) {
+            const msg = _el('p', { className: 'coming-soon' });
+            msg.textContent = 'No meshes loaded — go to Load (step 1) first.';
+            container.appendChild(msg);
+            return;
+        }
+
+        // Subject selector roster
+        const roster = _el('div', { className: 'subject-roster' });
+        subjectOrder.forEach(id => {
+            const s   = subjects[id];
+            const row = _el('div', { className: `subject-row${id === alignSubjectId ? ' active' : ''}` });
+            row.dataset.subjectId = id;
+
+            const info = _el('div', { className: 'subject-row-info' });
+            const idEl = _el('span', { className: 'subject-row-id' });
+            idEl.textContent = id;
+            info.appendChild(idEl);
+
+            if (s.sulci || alignInMemory[id]?.length > 0) {
+                const badge = _el('span', { className: 'sulci-badge' });
+                badge.textContent = '✓ landmarks';
+                info.appendChild(badge);
+            }
+
+            row.appendChild(info);
+            row.onclick = () => _activateAlign(id);
+            roster.appendChild(row);
         });
-        container.appendChild(tabs);
+        container.appendChild(roster);
+        container.appendChild(_el('div', { className: 'sph-divider' }));
 
-        const sphere = alignSlot === 'ref' ? sphereRef : sphereMov;
+        if (!alignSubjectId) {
+            const msg = _el('p', { className: 'coming-soon' });
+            msg.textContent = 'Select a mesh above to start alignment.';
+            container.appendChild(msg);
+            // Auto-select first subject that has a sphere
+            const firstWithSphere = subjectOrder.find(id => subjects[id]?.sphere);
+            if (firstWithSphere) setTimeout(() => _activateAlign(firstWithSphere), 0);
+            return;
+        }
 
+        const sphere = subjects[alignSubjectId]?.sphere;
         if (!sphere) {
             const msg = _el('p', { className: 'coming-soon' });
             msg.textContent = 'Preprocess this mesh first (step 2).';
@@ -705,12 +919,11 @@ window.app = (() => {
             };
             toolBar.appendChild(btn);
         });
-        // Rotate mode (separate, toggles pointer-events)
         const rotBtn = _el('button', {
             className: `tool-btn rotate${currentTool === 'rotate' ? ' active' : ''}`,
         });
         rotBtn.textContent = '↻';
-        rotBtn.title    = editDisabled ? 'Not available in 3D mode' : 'Rotate sphere (hold to orbit, then switch back to draw)';
+        rotBtn.title    = editDisabled ? 'Not available in 3D mode' : 'Rotate sphere';
         rotBtn.disabled = editDisabled;
         if (editDisabled) rotBtn.tabIndex = -1;
         rotBtn.onclick = () => {
@@ -722,7 +935,7 @@ window.app = (() => {
         toolBar.appendChild(rotBtn);
         container.appendChild(toolBar);
 
-        // ── View mode row (Flat / 3D / Wireframe) ────────────────────────────
+        // View mode row
         const viewRow = _el('div', { className: 'view-row' });
         viewRow.setAttribute('role', 'group');
         viewRow.setAttribute('aria-label', 'View controls');
@@ -733,7 +946,7 @@ window.app = (() => {
 
         const flatBtn = _el('button', { className: `view-btn${alignViewMode === 'flat' ? ' active' : ''}` });
         flatBtn.textContent = 'Flat';
-        flatBtn.title = 'Flat disc — stereographic projection (default, for drawing)';
+        flatBtn.title = 'Flat disc — stereographic projection';
         flatBtn.setAttribute('aria-pressed', String(alignViewMode === 'flat'));
         flatBtn.setAttribute('aria-label', 'Flat projection');
         if (!alignOverlay) { flatBtn.disabled = true; flatBtn.tabIndex = -1; }
@@ -754,7 +967,7 @@ window.app = (() => {
 
         const wireBtn = _el('button', { className: `view-btn${alignWireframe ? ' active' : ''}` });
         wireBtn.textContent = '⊡ Wire';
-        wireBtn.title = 'Toggle wireframe — see landmarks behind mesh folds';
+        wireBtn.title = 'Toggle wireframe';
         wireBtn.setAttribute('aria-pressed', String(alignWireframe));
         wireBtn.setAttribute('aria-label', 'Wireframe rendering');
         if (!alignOverlay) { wireBtn.disabled = true; wireBtn.tabIndex = -1; }
@@ -763,7 +976,7 @@ window.app = (() => {
 
         container.appendChild(viewRow);
 
-        // ── Rotation sliders (Flat mode only) ────────────────────────────────
+        // Rotation sliders (flat mode only)
         if (alignViewMode === 'flat' && alignStereoView) {
             const { alpha, beta, gamma } = alignStereoView.getEulerZYX();
 
@@ -806,7 +1019,7 @@ window.app = (() => {
 
                 slider.oninput = () => {
                     valSpan.textContent = `${slider.value}°`;
-                    valSpan.setAttribute('aria-valuenow', slider.value);  // keep span in sync
+                    valSpan.setAttribute('aria-valuenow', slider.value);
                     slider.setAttribute('aria-valuenow', slider.value);
                     const tw = parseInt(document.getElementById('rot-twist')?.value ?? alpha);
                     const tv = parseInt(document.getElementById('rot-tiltv')?.value ?? beta);
@@ -877,7 +1090,6 @@ window.app = (() => {
 
         container.appendChild(_el('div', { className: 'sph-divider' }));
 
-        // Load / Save sulci.json
         const loadSulciBtn = _el('button', { className: 'load-btn' });
         loadSulciBtn.style.marginTop = '0';
         loadSulciBtn.textContent = 'Load sulci.json';
@@ -896,17 +1108,16 @@ window.app = (() => {
         saveRotBtn.onclick = () => _saveRotationTxt();
         container.appendChild(saveRotBtn);
 
-        // If overlay not yet activated (first render of step 3), activate now
         if (!alignOverlay && sphere) {
-            setTimeout(() => _activateAlign(alignSlot), 0);
+            setTimeout(() => _activateAlign(alignSubjectId), 0);
         }
     }
 
     async function _loadSulciJSON() {
         if (!alignOverlay) return;
-        const sulciPath = alignSlot === 'ref' ? sulciRef : sulciMov;
+        const sulciPath = subjects[alignSubjectId]?.sulci;
         if (!sulciPath) {
-            _setStatus('No sulci.json found alongside the sphere file');
+            _setStatus('No sulci.json found for this subject');
             return;
         }
         try {
@@ -920,16 +1131,15 @@ window.app = (() => {
     }
 
     async function _saveSulciJSON() {
-        if (!alignOverlay) return;
-        const sphere = alignSlot === 'ref' ? sphereRef : sphereMov;
-        if (!sphere) return;
-        const dir = sphere.substring(0, sphere.lastIndexOf('/'));
+        if (!alignOverlay || !alignSubjectId) return;
+        const s = subjects[alignSubjectId];
+        if (!s?.sphere) return;
+        const dir      = s.sphere.substring(0, s.sphere.lastIndexOf('/'));
         const savePath = `${dir}/sulci.json`;
         try {
             const json = alignOverlay.toJSON();
             await apiPut('/api/file', { path: savePath, content: JSON.stringify(json, null, 2) });
-            if (alignSlot === 'ref') sulciRef = savePath;
-            else                     sulciMov = savePath;
+            subjects[alignSubjectId].sulci = savePath;
             _setStatus(`Saved ${savePath.split('/').pop()}`);
         } catch (e) {
             _setStatus(`Save sulci error: ${e.message}`);
@@ -937,16 +1147,15 @@ window.app = (() => {
     }
 
     async function _saveRotationTxt() {
-        if (!alignOverlay) return;
-        const sphere = alignSlot === 'ref' ? sphereRef : sphereMov;
-        if (!sphere) return;
-        const dir = sphere.substring(0, sphere.lastIndexOf('/'));
+        if (!alignOverlay || !alignSubjectId) return;
+        const s = subjects[alignSubjectId];
+        if (!s?.sphere) return;
+        const dir      = s.sphere.substring(0, s.sphere.lastIndexOf('/'));
         const savePath = `${dir}/rotation.txt`;
         try {
             const txt = alignOverlay.getCameraRotationText();
             await apiPut('/api/file', { path: savePath, content: txt });
-            if (alignSlot === 'ref') rotRef = savePath;
-            else                     rotMov = savePath;
+            subjects[alignSubjectId].rot = savePath;
             _setStatus(`Saved ${savePath.split('/').pop()}`);
         } catch (e) {
             _setStatus(`Save rotation error: ${e.message}`);
@@ -958,12 +1167,102 @@ window.app = (() => {
     function _renderMatchPanel(container) {
         container.innerHTML = '';
 
-        // Auto-derive output dir from current state
-        if (!matchOutDir && loadedMov && loadedRef) {
-            const movDir  = loadedMov.substring(0, loadedMov.lastIndexOf('/'));
-            const refStem = loadedRef.split('/').pop().replace(/\.ply$/, '');
-            matchOutDir = `${movDir}/match_${refStem}`;
+        // Auto-populate pickers on first render
+        if (!matchRefId && subjectOrder.length >= 1) matchRefId = subjectOrder[0];
+        if (!matchMovId && subjectOrder.length >= 2) matchMovId = subjectOrder[1];
+
+        const ref = matchRefId ? subjects[matchRefId] : null;
+        const mov = matchMovId ? subjects[matchMovId] : null;
+
+        // Auto-derive output dir
+        if (!matchOutDir && matchRefId && matchMovId) {
+            if (projectRoot) {
+                matchOutDir = `${projectRoot}/data/derived/matches/${matchMovId}_as_${matchRefId}`;
+            } else if (mov?.path && ref?.path) {
+                const movDir  = mov.path.substring(0, mov.path.lastIndexOf('/'));
+                const refStem = ref.path.split('/').pop().replace(/\.ply(\.gz)?$/, '');
+                matchOutDir = `${movDir}/match_${refStem}`;
+            }
         }
+
+        // ── Existing matches roster ──────────────────────────────────────────
+        if (existingMatches.length > 0) {
+            const rosterSection = _el('div', { className: 'sph-section' });
+            const rosterHdr = _el('div', { className: 'sph-label' });
+            rosterHdr.textContent = 'Existing matches';
+            rosterSection.appendChild(rosterHdr);
+
+            existingMatches.forEach(m => {
+                const row = _el('div', { className: 'match-roster-row' });
+                row.setAttribute('aria-label', `Match ${m.mov_id} → ${m.ref_id}`);
+
+                const nameEl = _el('span', { className: 'match-roster-name' });
+                nameEl.textContent = `${m.mov_id} → ${m.ref_id}`;
+                row.appendChild(nameEl);
+
+                const statusEl = _el('span', { className: 'match-roster-status' });
+                statusEl.textContent = `${m.has_morph ? '◉' : '○'} morph  ${m.has_match ? '◉' : '○'} match`;
+                statusEl.title = `morph.sphere.ply: ${m.has_morph ? 'present' : 'missing'} · surf.0.ply: ${m.has_match ? 'present' : 'missing'}`;
+                row.appendChild(statusEl);
+
+                const loadBtn = _el('button', { className: 'roster-load-btn' });
+                loadBtn.textContent = 'Load';
+                loadBtn.disabled = !m.has_match;
+                loadBtn.setAttribute('aria-label', `Load match ${m.name}`);
+                loadBtn.onclick = () => _loadMatchFromDisk(m);
+                row.appendChild(loadBtn);
+
+                const delBtn = _el('button', { className: 'roster-del-btn' });
+                delBtn.textContent = '✕';
+                delBtn.setAttribute('aria-label', `Delete match ${m.name}`);
+                delBtn.onclick = () => _confirmDeleteMatch(m, row, rosterSection);
+                row.appendChild(delBtn);
+
+                rosterSection.appendChild(row);
+            });
+
+            container.appendChild(rosterSection);
+            container.appendChild(_el('div', { className: 'sph-divider' }));
+        }
+
+        // ── Ref / Mov pickers ────────────────────────────────────────────────
+        const pickerSection = _el('div', { className: 'sph-section' });
+        const pickerHdr = _el('div', { className: 'sph-label' });
+        pickerHdr.textContent = 'New match';
+        pickerSection.appendChild(pickerHdr);
+
+        const _makePickerRow = (label, currentId, selId, onSet) => {
+            const row = _el('div', { className: 'param-row' });
+            const lbl = _el('span', { className: 'param-label' });
+            lbl.textContent = label;
+            row.appendChild(lbl);
+            const sel = _el('select');
+            sel.id = selId;
+            sel.className = 'match-subject-select';
+            sel.setAttribute('aria-label', `${label} subject`);
+            const emptyOpt = _el('option');
+            emptyOpt.value = ''; emptyOpt.textContent = '— select —';
+            sel.appendChild(emptyOpt);
+            subjectOrder.forEach(id => {
+                const opt = _el('option');
+                opt.value = id; opt.textContent = id;
+                if (id === currentId) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            sel.onchange = () => {
+                onSet(sel.value || null);
+                matchOutDir = null; morphResult = null; matchResult = null;
+                morphSurface = null; matchSurface = null;
+                renderStep(currentStep);
+            };
+            row.appendChild(sel);
+            return row;
+        };
+
+        pickerSection.appendChild(_makePickerRow('Ref', matchRefId, 'match-ref-select', v => { matchRefId = v; }));
+        pickerSection.appendChild(_makePickerRow('Mov', matchMovId, 'match-mov-select', v => { matchMovId = v; }));
+        container.appendChild(pickerSection);
+        container.appendChild(_el('div', { className: 'sph-divider' }));
 
         // ── Inputs checklist ─────────────────────────────────────────────────
         const inputsSection = _el('div', { className: 'sph-section' });
@@ -971,26 +1270,25 @@ window.app = (() => {
         inputsHdr.textContent = 'Inputs';
         inputsSection.appendChild(inputsHdr);
 
-        const refName = loadedRef ? loadedRef.split('/').slice(-2).join('/') : null;
-        const movName = loadedMov ? loadedMov.split('/').slice(-2).join('/') : null;
-        inputsSection.appendChild(_preItem(refName ? `Ref: ${refName}` : 'Ref: not loaded', !!loadedRef));
-        inputsSection.appendChild(_preItem(movName ? `Mov: ${movName}` : 'Mov: not loaded', !!loadedMov));
+        inputsSection.appendChild(_preItem(matchRefId ? `Ref: ${matchRefId}` : 'Ref: not selected', !!ref?.path));
+        inputsSection.appendChild(_preItem(matchMovId ? `Mov: ${matchMovId}` : 'Mov: not selected', !!mov?.path));
 
-        const bothSpheres = !!(sphereRef && sphereMov);
-        const sphereLabel = !sphereRef && !sphereMov ? 'Spheres: neither computed'
-                          : !sphereRef               ? 'Spheres: ref missing'
-                          : !sphereMov               ? 'Spheres: mov missing'
+        const bothSpheres = !!(ref?.sphere && mov?.sphere);
+        const sphereLabel = !ref?.sphere && !mov?.sphere ? 'Spheres: neither computed'
+                          : !ref?.sphere                  ? 'Spheres: ref missing'
+                          : !mov?.sphere                  ? 'Spheres: mov missing'
                           : 'Spheres computed';
         inputsSection.appendChild(_preItem(sphereLabel, bothSpheres));
 
-        const bothLandmarks = !!(sulciRef && sulciMov);
-        const lmkLabel = `Landmarks: ref ${sulciRef ? '✓' : '✗'} · mov ${sulciMov ? '✓' : '✗'}`;
-        inputsSection.appendChild(_preItem(lmkLabel, bothLandmarks));
+        const hasRefSulci = !!(alignInMemory[matchRefId]?.length || ref?.sulci);
+        const hasMovSulci = !!(alignInMemory[matchMovId]?.length || mov?.sulci);
+        const lmkLabel = `Landmarks: ref ${hasRefSulci ? '✓' : '✗'} · mov ${hasMovSulci ? '✓' : '✗'}`;
+        inputsSection.appendChild(_preItem(lmkLabel, hasRefSulci && hasMovSulci));
 
-        if (rotRef || rotMov) {
-            const bothRot  = !!(rotRef && rotMov);
-            const rotLabel = !rotRef ? 'Rotations: ref missing'
-                           : !rotMov ? 'Rotations: mov missing'
+        if (ref?.rot || mov?.rot) {
+            const bothRot  = !!(ref?.rot && mov?.rot);
+            const rotLabel = !ref?.rot ? 'Rotations: ref missing'
+                           : !mov?.rot ? 'Rotations: mov missing'
                            : 'Rotations';
             inputsSection.appendChild(_preItem(rotLabel, bothRot));
         }
@@ -1023,14 +1321,12 @@ window.app = (() => {
         viewModeRow.setAttribute('role', 'group');
         viewModeRow.setAttribute('aria-label', 'Match viewer mode');
         const VIEW_MODES = [
-            { id: 'morph',   label: 'Morph',   ok: !!morphSurface,   title: 'Ref → Mov retopology blend' },
-            { id: 'match',   label: 'Match',   ok: !!matchResult,    title: 'Matched surface' },
+            { id: 'morph', label: 'Morph', ok: !!morphSurface, title: 'Ref → Mov retopology blend' },
+            { id: 'match', label: 'Match', ok: !!matchResult,  title: 'Matched surface' },
         ];
         VIEW_MODES.forEach(({ id, label, ok, title }) => {
             const b = _el('button', { className: `view-btn${matchViewMode === id ? ' active' : ''}` });
-            b.textContent = label;
-            b.title       = title;
-            b.disabled    = !ok;
+            b.textContent = label; b.title = title; b.disabled = !ok;
             b.setAttribute('aria-pressed', String(matchViewMode === id));
             b.setAttribute('aria-label', title);
             b.onclick = () => {
@@ -1043,7 +1339,6 @@ window.app = (() => {
         });
         viewSection.appendChild(viewModeRow);
 
-        // Blend slider — interpolates ref ↔ mov in both morph and match modes
         if (morphSurface || matchSurface) {
             const blendRow = _el('div', { className: 'param-row' });
             const blendLbl = _el('label', { className: 'param-label', htmlFor: 'morph-blend' });
@@ -1098,7 +1393,7 @@ window.app = (() => {
         morphBarWrap.appendChild(morphBarFill);
         morphSection.appendChild(morphBarWrap);
 
-        const canMorph = !!(loadedRef && loadedMov && sphereRef && sphereMov && sulciRef && sulciMov);
+        const canMorph = !!(ref?.path && mov?.path && ref?.sphere && mov?.sphere && hasRefSulci && hasMovSulci);
         const morphBtn = _el('button', { className: 'load-btn' });
         morphBtn.id = 'btn-run-morph';
         morphBtn.textContent = '▶ Run Morph';
@@ -1133,7 +1428,6 @@ window.app = (() => {
         matchDesc.textContent = 'Laplacian eigenvector optimisation (~1 min)';
         matchSection.appendChild(matchDesc);
 
-        // k eigenvectors slider
         const kRow = _el('div', { className: 'param-row' });
         const kLabel = _el('label', { className: 'param-label', htmlFor: 'match-k' });
         kLabel.textContent = 'k eigenvectors';
@@ -1156,7 +1450,6 @@ window.app = (() => {
         kRow.appendChild(kSlider); kRow.appendChild(kVal);
         matchSection.appendChild(kRow);
 
-        // nsteps segmented control
         const stepsRow = _el('div', { className: 'param-row' });
         const stepsLabel = _el('span', { className: 'param-label' });
         stepsLabel.textContent = 'Refinement steps';
@@ -1174,12 +1467,10 @@ window.app = (() => {
         stepsRow.appendChild(stepsGroup);
         matchSection.appendChild(stepsRow);
 
-        // Advanced accordion (weight sliders)
         const adv = _el('details', { className: 'advanced-details' });
         const advSum = _el('summary');
         advSum.textContent = 'Advanced';
         adv.appendChild(advSum);
-
         [
             { id: 'w-smooth',  label: 'Smooth weight',  min: 0, max: 10, step: 0.1, get: () => matchWSmooth,  set: v => { matchWSmooth  = v; } },
             { id: 'w-deform',  label: 'Deform weight',  min: 0, max: 50, step: 0.5, get: () => matchWDeform,  set: v => { matchWDeform  = v; } },
@@ -1243,7 +1534,7 @@ window.app = (() => {
     }
 
     async function _refreshMatchViewer({ preserveOrientation = false } = {}) {
-        if (!loadedRef) return;
+        if (!matchRefId || !subjects[matchRefId]) return;
 
         if (matchViewMode === 'morph' || !matchResult) {
             viewer.clearAll();
@@ -1255,9 +1546,6 @@ window.app = (() => {
             }
             return;
         }
-        // match mode — blend mesh: ref shape → matched moving brain shape (same as morph mode).
-        // matchSurface.matchVerts = surf.0.ply (MOV brain in REF topology from matchmesh2),
-        // so both vertex sets share refFaces and the blend is geometrically meaningful.
         viewer.clearAll();
         if (matchSurface) {
             viewer.loadBlendMesh(matchSurface.refVerts, matchSurface.matchVerts, matchSurface.faces);
@@ -1271,27 +1559,33 @@ window.app = (() => {
         fillEl.style.width = '5%';
         _setStatus('Running morph…');
         try {
-            // Prefer in-memory overlay (unsaved edits), fall back to last saved file on disk
-            const sulciMovData = alignInMemoryMov ?? await apiGet('/api/file', { path: sulciMov });
-            const sulciRefData = alignInMemoryRef ?? await apiGet('/api/file', { path: sulciRef });
-            console.log('[runMorph] mov:', alignInMemoryMov ? `in-memory (${alignInMemoryMov.length} regions)` : `disk (${sulciMov})`);
-            console.log('[runMorph] ref:', alignInMemoryRef ? `in-memory (${alignInMemoryRef.length} regions)` : `disk (${sulciRef})`);
+            const ref = subjects[matchRefId];
+            const mov = subjects[matchMovId];
+
+            const sulciRefData = alignInMemory[matchRefId] ?? await apiGet('/api/file', { path: ref.sulci });
+            const sulciMovData = alignInMemory[matchMovId] ?? await apiGet('/api/file', { path: mov.sulci });
+            console.log('[runMorph] ref:', alignInMemory[matchRefId] ? `in-memory (${alignInMemory[matchRefId].length} regions)` : `disk (${ref.sulci})`);
+            console.log('[runMorph] mov:', alignInMemory[matchMovId] ? `in-memory (${alignInMemory[matchMovId].length} regions)` : `disk (${mov.sulci})`);
             fillEl.style.width = '15%';
 
             if (!matchOutDir) {
-                const movDir  = loadedMov.substring(0, loadedMov.lastIndexOf('/'));
-                const refStem = loadedRef.split('/').pop().replace(/\.ply(\.gz)?$/, '');
-                matchOutDir = `${movDir}/match_${refStem}`;
+                if (projectRoot) {
+                    matchOutDir = `${projectRoot}/data/derived/matches/${matchMovId}_as_${matchRefId}`;
+                } else {
+                    const movDir  = mov.path.substring(0, mov.path.lastIndexOf('/'));
+                    const refStem = ref.path.split('/').pop().replace(/\.ply(\.gz)?$/, '');
+                    matchOutDir = `${movDir}/match_${refStem}`;
+                }
             }
 
             const body = {
-                ref_sphere: sphereRef,
+                ref_sphere: ref.sphere,
                 sulci_ref:  sulciRefData,
                 sulci_mov:  sulciMovData,
                 out_dir:    matchOutDir,
             };
-            if (rotRef) body.rot_ref_path = rotRef;
-            if (rotMov) body.rot_mov_path = rotMov;
+            if (ref.rot) body.rot_ref_path = ref.rot;
+            if (mov.rot) body.rot_mov_path = mov.rot;
 
             const { job_id } = await apiPost('/api/morph', body);
             fillEl.style.width = '25%';
@@ -1301,32 +1595,28 @@ window.app = (() => {
             });
             fillEl.style.width = '75%';
 
-            // Load results for blend display (visualization only — retopology in browser)
             const [morphSphRaw, movSphRaw, movNat, refNat, refSphRaw] = await Promise.all([
                 apiGet('/api/mesh_raw', { path: result.morph_sphere_path }),
-                apiGet('/api/mesh_raw', { path: sphereMov }),
-                apiGet('/api/mesh_raw', { path: loadedMov }),
-                apiGet('/api/mesh_raw', { path: loadedRef }),
-                apiGet('/api/mesh_raw', { path: sphereRef }),
+                apiGet('/api/mesh_raw', { path: mov.sphere }),
+                apiGet('/api/mesh_raw', { path: mov.path }),
+                apiGet('/api/mesh_raw', { path: ref.path }),
+                apiGet('/api/mesh_raw', { path: ref.sphere }),
             ]);
 
-            // Rotate mov sphere into canonical frame for retopology query.
-            // Normalise to unit sphere first (matches reference direction() call) — /api/mesh_raw
-            // mean-centres but does not normalise, which would shift triangle positions slightly.
             let R_mov = null;
-            if (rotMov) {
-                const rotMovData = await apiGet('/api/file', { path: rotMov });
+            if (mov.rot) {
+                const rotMovData = await apiGet('/api/file', { path: mov.rot });
                 const rotMovTxt = typeof rotMovData === 'string' ? rotMovData : (rotMovData?.content ?? '');
                 if (rotMovTxt) R_mov = parseRotMat(rotMovTxt);
             }
             const _unitVec = ([x, y, z]) => { const r = Math.sqrt(x*x+y*y+z*z)||1; return [x/r, y/r, z/r]; };
-            const movSphUnit = movSphRaw.vertices.map(_unitVec);
-            const movSphForNN = R_mov ? rotateVertsVR(movSphUnit, R_mov) : movSphUnit;
+            const movSphUnit   = movSphRaw.vertices.map(_unitVec);
+            const movSphForNN  = R_mov ? rotateVertsVR(movSphUnit, R_mov) : movSphUnit;
             const remeshed = resampleMesh(
-                movSphRaw.faces,         // MOV sphere topology
-                movSphForNN,             // MOV sphere in canonical frame
-                movNat.vertices,         // MOV native brain
-                morphSphRaw.vertices,    // warped REF sphere in canonical frame (from API)
+                movSphRaw.faces,
+                movSphForNN,
+                movNat.vertices,
+                morphSphRaw.vertices,
             );
             morphSurface    = { refVerts: refNat.vertices, morphVerts: remeshed, faces: refSphRaw.faces };
             morphResult     = { morph_sphere_path: result.morph_sphere_path };
@@ -1350,13 +1640,16 @@ window.app = (() => {
         barWrap.style.display = 'block';
         _setStatus('Running match optimisation…');
         try {
-            // matchmesh2 naming: "ref" = brain to project onto = UI's mov (F10_P8)
-            //                    "mov" = sphere to deform      = UI's ref (F02_P0)
+            const ref = subjects[matchRefId];
+            const mov = subjects[matchMovId];
+
+            // matchmesh2 naming: "ref" = brain to project onto = UI's mov
+            //                    "mov" = sphere to deform      = UI's ref
             const body = {
-                ref_ply:      loadedMov,    // matchmesh2 "ref" = UI's mov
-                ref_sphere:   sphereMov,
-                mov_ply:      loadedRef,    // matchmesh2 "mov" = UI's ref
-                mov_sphere:   sphereRef,
+                ref_ply:      mov.path,
+                ref_sphere:   mov.sphere,
+                mov_ply:      ref.path,
+                mov_sphere:   ref.sphere,
                 morph_sphere: morphResult.morph_sphere_path,
                 out_dir:      matchOutDir,
                 k:            matchK,
@@ -1365,8 +1658,8 @@ window.app = (() => {
                 w_deform:     matchWDeform,
                 w_project:    matchWProject,
             };
-            if (rotMov) body.ref_rot = rotMov;  // rotation for matchmesh2's "ref" (UI's mov)
-            if (rotRef) body.mov_rot = rotRef;  // rotation for matchmesh2's "mov" (UI's ref)
+            if (mov.rot) body.ref_rot = mov.rot;
+            if (ref.rot) body.mov_rot = ref.rot;
 
             const { job_id } = await apiPost('/api/match', body);
             const result = await pollJob(job_id);
@@ -1374,22 +1667,116 @@ window.app = (() => {
             matchViewMode = 'match';
             barWrap.style.display = 'none';
 
-            // surf.0.ply = F10_P8 brain already projected onto F02_P0 topology by matchmesh2.
-            // Load directly — matchmesh2 handles the retopology in the correct rotated frame.
+            const params = {
+                ref_id:    matchRefId,
+                mov_id:    matchMovId,
+                timestamp: new Date().toISOString(),
+                match: {
+                    k:         matchK,
+                    nsteps:    matchNsteps,
+                    w_smooth:  matchWSmooth,
+                    w_deform:  matchWDeform,
+                    w_project: matchWProject,
+                },
+            };
+            apiPut('/api/file', {
+                path:    `${matchOutDir}/params.json`,
+                content: JSON.stringify(params, null, 2),
+            }).catch(() => {});
+
             const matchedNatRaw = await apiGet('/api/mesh_raw', { path: result.matched_ply });
             const refVerts = morphSurface ? morphSurface.refVerts
-                : (await apiGet('/api/mesh_raw', { path: loadedRef })).vertices;
+                : (await apiGet('/api/mesh_raw', { path: ref.path })).vertices;
             const refFaces = morphSurface ? morphSurface.faces : matchedNatRaw.faces;
             matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: refFaces };
 
             await _refreshMatchViewer({ preserveOrientation: true });
             _setStatus(`Match done — ${result.matched_ply.split('/').pop()}`);
+            await _loadExistingMatches();
             renderStep(currentStep);
         } catch (e) {
             _setStatus(`Match error: ${e.message}`);
             btn.disabled = false;
             barWrap.style.display = 'none';
         }
+    }
+
+    // ── Match roster helpers ─────────────────────────────────────────────────
+
+    async function _loadExistingMatches() {
+        if (!projectRoot) { existingMatches = []; return; }
+        try {
+            existingMatches = await getMatches(projectRoot);
+        } catch {
+            existingMatches = [];
+        }
+    }
+
+    async function _loadMatchFromDisk(m) {
+        if (!m.has_match) return;
+        _setStatus(`Loading match ${m.name}…`);
+
+        matchRefId  = m.ref_id;
+        matchMovId  = m.mov_id;
+        matchOutDir = m.dir;
+        matchResult  = { matched_ply: `${m.dir}/surf.0.ply` };
+        matchViewMode = 'match';
+        morphResult  = m.has_morph ? { morph_sphere_path: `${m.dir}/morph.sphere.ply` } : null;
+        morphSurface = null;
+
+        try {
+            const matchedPly    = `${m.dir}/surf.0.ply`;
+            const matchedNatRaw = await apiGet('/api/mesh_raw', { path: matchedPly });
+
+            const ref = subjects[matchRefId];
+            const refVerts = ref?.path
+                ? (await apiGet('/api/mesh_raw', { path: ref.path })).vertices
+                : matchedNatRaw.vertices;
+
+            matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: matchedNatRaw.faces };
+
+            await _refreshMatchViewer({ preserveOrientation: false });
+            _setStatus(`Loaded ${m.name}`);
+            renderStep(currentStep);
+        } catch (e) {
+            _setStatus(`Load error: ${e.message}`);
+            matchResult = null; matchSurface = null;
+            renderStep(currentStep);
+        }
+    }
+
+    function _confirmDeleteMatch(m, rowEl, sectionEl) {
+        const existing = rowEl.querySelector('.remove-confirm');
+        if (existing) { existing.remove(); return; }
+
+        const confirmEl = _el('div', { className: 'remove-confirm' });
+        confirmEl.textContent = `Delete ${m.name}? `;
+
+        const yesBtn = _el('button', { className: 'remove-confirm-yes' });
+        yesBtn.textContent = 'Delete';
+        yesBtn.onclick = async e => {
+            e.stopPropagation();
+            try { await deleteMatch({ match_dir: m.dir }); } catch { /* still remove row */ }
+            rowEl.remove();
+            existingMatches = existingMatches.filter(x => x.dir !== m.dir);
+            if (matchOutDir === m.dir) {
+                matchOutDir = null; morphResult = null; matchResult = null;
+                morphSurface = null; matchSurface = null;
+                viewer.clearAll();
+            }
+            if (sectionEl.querySelectorAll('.match-roster-row').length === 0) {
+                sectionEl.remove();
+            }
+            _setStatus(`Deleted ${m.name}`);
+        };
+        confirmEl.appendChild(yesBtn);
+
+        const noBtn = _el('button', { className: 'remove-confirm-no' });
+        noBtn.textContent = 'Cancel';
+        noBtn.onclick = e => { e.stopPropagation(); confirmEl.remove(); };
+        confirmEl.appendChild(noBtn);
+
+        rowEl.appendChild(confirmEl);
     }
 
     // ── Step 5 — Trajectory player ───────────────────────────────────────────
@@ -1402,7 +1789,6 @@ window.app = (() => {
             window._player = player;
         }
 
-        // Demo load button
         const demoBtn = _el('button', { className: 'load-btn' });
         demoBtn.textContent = 'Load demo trajectory';
         demoBtn.onclick = () => _loadTrajectoryDemo();
@@ -1413,19 +1799,13 @@ window.app = (() => {
             info.textContent = `${player.frameCount} frames loaded`;
             container.appendChild(info);
 
-            // Speed control
             const speedRow = _el('div', { className: 'traj-row' });
             speedRow.innerHTML = '<label>Speed</label>';
             const speedInput = _el('input');
             speedInput.type = 'range';
-            speedInput.min = '1';
-            speedInput.max = '12';
-            speedInput.step = '0.5';
-            speedInput.value = '4';
-            speedInput.className = 'traj-speed';
-            speedInput.oninput = () => {
-                player.speed = parseFloat(speedInput.value);
-            };
+            speedInput.min = '1'; speedInput.max = '12'; speedInput.step = '0.5';
+            speedInput.value = '4'; speedInput.className = 'traj-speed';
+            speedInput.oninput = () => { player.speed = parseFloat(speedInput.value); };
             speedRow.appendChild(speedInput);
             container.appendChild(speedRow);
         }
@@ -1439,11 +1819,10 @@ window.app = (() => {
                 player = new TrajectoryPlayer(viewer);
                 player.onSeek(t => _updateScrubber(t));
             }
-            window._player = player;  // always expose, even if player pre-existed
+            window._player = player;
             await player.load(urls);
             _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
             _showTrajectoryBar(true);
-            // Re-render panel to show controls
             _renderTrajectoryPanel(document.getElementById('rpanel-content'));
         } catch (e) {
             _setStatus(`Trajectory error: ${e.message}`);
@@ -1472,42 +1851,35 @@ window.app = (() => {
         document.getElementById('status-msg').textContent = msg;
     }
 
-    // ── Public API ───────────────────────────────────────────────────────────
-    function _showLandmark(name, slot, src, srcLabel) {
-        if (!src) { console.log(`[showLandmark] ${slot} — no data (${srcLabel} is null)`); return; }
+    // ── Debug helpers ────────────────────────────────────────────────────────
+    function _showLandmark(name, id, src, srcLabel) {
+        if (!src) { console.log(`[showLandmark] ${id} — no data (${srcLabel} is null)`); return; }
         const reg = src.find(r => r.name === name);
-        if (!reg) { console.log(`[showLandmark] "${name}" not found in ${slot}/${srcLabel} — regions: ${src.map(r=>r.name).join(', ')}`); return; }
-        console.log(`[showLandmark] "${name}" slot=${slot} src=${srcLabel} — ${reg.path0.length} points:`);
+        if (!reg) { console.log(`[showLandmark] "${name}" not found in ${id}/${srcLabel} — regions: ${src.map(r=>r.name).join(', ')}`); return; }
+        console.log(`[showLandmark] "${name}" id=${id} src=${srcLabel} — ${reg.path0.length} points:`);
         reg.path0.forEach((p, i) => console.log(`  [${i}] px=${p.px.toFixed(4)}  py=${p.py.toFixed(4)}`));
         return reg.path0;
     }
 
-    // showAlignIHF()              — live overlay (current slot)
-    // showAlignIHF('IHF', 'mov') — the OTHER slot (from its in-memory snapshot)
-    window.showAlignIHF = (name='IHF', slot) => {
-        const target = slot ?? alignSlot;
-        if (target === alignSlot) {
-            // Read directly from the live overlay, without calling toJSON() (no side effects)
-            if (!alignOverlay) { console.log('[showAlignIHF] no overlay — are you in Align step?'); return; }
-            alignOverlay._saveRef();  // flush path0 without deselecting
+    window.showAlignIHF = (name='IHF', id) => {
+        const targetId = id ?? alignSubjectId;
+        if (targetId === alignSubjectId && alignOverlay) {
+            alignOverlay._saveRef();
             const reg = alignOverlay.regions.find(r => r.name === name);
             if (!reg) { console.log(`[showAlignIHF] "${name}" not found — regions: ${alignOverlay.regions.map(r=>r.name).join(', ')}`); return; }
-            console.log(`[showAlignIHF] "${name}" slot=${alignSlot} src=LIVE — ${reg.path0.length} points:`);
+            console.log(`[showAlignIHF] "${name}" subject=${alignSubjectId} src=LIVE — ${reg.path0.length} points:`);
             reg.path0.forEach((p, i) => console.log(`  [${i}] px=${p.px.toFixed(4)}  py=${p.py.toFixed(4)}`));
             return reg.path0;
         }
-        // Non-active slot: read from its in-memory snapshot
-        const src = target === 'mov' ? alignInMemoryMov : alignInMemoryRef;
-        return _showLandmark(name, target, src, `alignInMemory${target==='mov'?'Mov':'Ref'}`);
+        return _showLandmark(name, targetId, alignInMemory[targetId], `alignInMemory[${targetId}]`);
     };
 
-    // showMatchIHF()              — what _runMorph uses for ref
-    // showMatchIHF('IHF', 'mov') — what _runMorph uses for mov
-    window.showMatchIHF = (name='IHF', slot='ref') => {
-        const src = slot === 'mov' ? alignInMemoryMov : alignInMemoryRef;
-        return _showLandmark(name, slot, src, `alignInMemory${slot==='mov'?'Mov':'Ref'}`);
+    window.showMatchIHF = (name='IHF', id) => {
+        const targetId = id ?? matchRefId;
+        return _showLandmark(name, targetId, alignInMemory[targetId], `alignInMemory[${targetId}]`);
     };
 
+    // ── Public API ───────────────────────────────────────────────────────────
     return { init, goStep, loadMeshByPath };
 })();
 

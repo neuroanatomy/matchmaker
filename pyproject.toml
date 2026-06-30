@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 matchmaker = "matchmaker.cli:main"
+matchmaker-match = "matchmaker.cli_match:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

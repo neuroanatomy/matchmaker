@@ -75,7 +75,7 @@ export class FileBrowser {
             row.dataset.path = e.path;
             if (e.path === selPath) row.classList.add('selected');
 
-            const icon = e.is_dir ? '📁' : '🔷';
+            const icon = e.is_dir ? '📁' : e.name === 'project.json' ? '📋' : '🔷';
             row.innerHTML = `<span class="icon">${icon}</span><span class="name">${e.name}</span>`;
 
             if (e.is_dir) {

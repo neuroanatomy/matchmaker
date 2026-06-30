@@ -9,9 +9,11 @@ import igl
 import numpy as np
 import pytest
 
-DATA = "/Volumes/T7/Documents/2026_06MatchMaker/data/external"
-F02  = f"{DATA}/F02_P0/seg-pial-t2"
-F06  = f"{DATA}/F06_P4/seg-pial-t2"
+PROJ = "/Volumes/T7/Documents/2026_06MatchMaker/data/external/project"
+F02_PLY    = f"{PROJ}/data/raw/meshes/F02_P0/mesh.ply"
+F06_PLY    = f"{PROJ}/data/raw/meshes/F06_P4/mesh.ply"
+F02_ANN    = f"{PROJ}/data/derived/annotations/F02_P0"
+F06_ANN    = f"{PROJ}/data/derived/annotations/F06_P4"
 
 # Minimal sulci: one named landmark with two straight-line points.
 _SULCI_STUB = [{"name": "IHF", "path0": [
@@ -28,15 +30,15 @@ _SULCI_STUB = [{"name": "IHF", "path0": [
 def test_run_morph_creates_file(tmp_path):
     from matchmaker import pipeline
 
-    sulci_ref = json.load(open(f"{F02}/sulci.json"))
-    sulci_mov = json.load(open(f"{F06}/sulci.json"))
+    sulci_ref = json.load(open(f"{F02_ANN}/sulci.json"))
+    sulci_mov = json.load(open(f"{F06_ANN}/sulci.json"))
 
     result = pipeline.run_morph(
-        f"{F02}/e2.sphere.ply",
+        f"{F02_ANN}/sphere.ply",
         sulci_ref, sulci_mov,
         str(tmp_path),
-        rot_ref_path=f"{F02}/rotation.txt",
-        rot_mov_path=f"{F06}/rotation.txt",
+        rot_ref_path=f"{F02_ANN}/rotation.txt",
+        rot_mov_path=f"{F06_ANN}/rotation.txt",
     )
 
     assert "morph_sphere_path" in result
@@ -60,7 +62,7 @@ def test_run_morph_creates_file(tmp_path):
 def test_morph_endpoint_returns_job(client, tmp_path):
     out_dir = str(tmp_path / "morph_out")
     payload = {
-        "ref_sphere": f"{F02}/e2.sphere.ply",
+        "ref_sphere": f"{F02_ANN}/sphere.ply",
         "sulci_ref":  _SULCI_STUB,
         "sulci_mov":  _SULCI_STUB,
         "out_dir":    out_dir,
@@ -78,7 +80,7 @@ def test_morph_endpoint_returns_job(client, tmp_path):
 def test_morph_endpoint_missing_sulci_returns_400(client, tmp_path):
     out_dir = str(tmp_path / "morph_out")
     payload = {
-        "ref_sphere": f"{F02}/e2.sphere.ply",
+        "ref_sphere": f"{F02_ANN}/sphere.ply",
         "out_dir":    out_dir,
         # sulci_ref and sulci_mov intentionally omitted
     }
@@ -94,15 +96,15 @@ def test_morph_endpoint_missing_sulci_returns_400(client, tmp_path):
 def test_morph_endpoint_end_to_end(client, tmp_path):
     out_dir = str(tmp_path / "morph_out")
 
-    sulci_ref = json.load(open(f"{F02}/sulci.json"))
-    sulci_mov = json.load(open(f"{F06}/sulci.json"))
+    sulci_ref = json.load(open(f"{F02_ANN}/sulci.json"))
+    sulci_mov = json.load(open(f"{F06_ANN}/sulci.json"))
 
     payload = {
-        "ref_sphere":   f"{F02}/e2.sphere.ply",
+        "ref_sphere":   f"{F02_ANN}/sphere.ply",
         "sulci_ref":    sulci_ref,
         "sulci_mov":    sulci_mov,
-        "rot_ref_path": f"{F02}/rotation.txt",
-        "rot_mov_path": f"{F06}/rotation.txt",
+        "rot_ref_path": f"{F02_ANN}/rotation.txt",
+        "rot_mov_path": f"{F06_ANN}/rotation.txt",
         "out_dir":      out_dir,
     }
 

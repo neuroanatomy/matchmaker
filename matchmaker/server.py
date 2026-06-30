@@ -1,6 +1,8 @@
 import os
 import gzip
 import json
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, jsonify, request, send_file, Response
 import matchmaker
@@ -19,7 +21,7 @@ def create_app(data_root: str) -> Flask:
     def _cors(response):
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
         return response
 
     @app.route("/")
@@ -56,6 +58,54 @@ def create_app(data_root: str) -> Flask:
             })
         return jsonify(entries)
 
+    # ── Match roster ─────────────────────────────────────────────────────────
+    @app.route("/api/matches")
+    def list_matches():
+        project_root = request.args.get("project_root", "").strip()
+        if not project_root:
+            return jsonify({"error": "project_root required"}), 400
+
+        matches_dir = Path(os.path.abspath(project_root)) / "data" / "derived" / "matches"
+        if not matches_dir.is_dir():
+            return jsonify([])
+
+        results = []
+        for entry in sorted(matches_dir.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+
+            name = entry.name
+            sep  = "_as_"
+            idx  = name.find(sep)
+            if idx == -1:
+                mov_id, ref_id = name, None
+            else:
+                mov_id = name[:idx]
+                ref_id = name[idx + len(sep):]
+
+            has_morph = (entry / "morph.sphere.ply").exists()
+            has_match = (entry / "surf.0.ply").exists() or (entry / "surf.0.ply.gz").exists()
+
+            params = None
+            params_file = entry / "params.json"
+            if params_file.exists():
+                try:
+                    params = json.loads(params_file.read_text())
+                except Exception:
+                    pass
+
+            results.append({
+                "name":      name,
+                "dir":       str(entry),
+                "mov_id":    mov_id,
+                "ref_id":    ref_id,
+                "has_morph": has_morph,
+                "has_match": has_match,
+                "params":    params,
+            })
+
+        return jsonify(results)
+
     # ── Mesh serving ──────────────────────────────────────────────────────────
     @app.route("/api/mesh")
     def serve_mesh():
@@ -78,22 +128,48 @@ def create_app(data_root: str) -> Flask:
     # ── Companion files ───────────────────────────────────────────────────────
     @app.route("/api/companions")
     def get_companions():
-        path_str = request.args.get("path", "")
+        path_str    = request.args.get("path", "")
+        project_root = request.args.get("project_root", "")
+        subject_id   = request.args.get("subject_id", "")
+
         target = _safe_path(data_root, path_str, allow_any=True)
         if target is None:
             return jsonify({"error": "Forbidden"}), 403
         if not str(target).endswith(".ply"):
             return jsonify({"error": "Not a PLY file"}), 400
-        base = str(target)[:-4]
-        parent = target.parent
+
         def _existing(p):
-            return p if Path(p).exists() else None
+            return str(p) if Path(p).exists() else None
+
+        # Project-aware lookup: check annotations dir first
+        if project_root and subject_id:
+            ann = Path(project_root) / "data" / "derived" / "annotations" / subject_id
+            result = {
+                "sphere":       _existing(ann / "sphere.ply"),
+                "sulc":         _existing(ann / "sulc.txt.gz"),
+                "curv":         _existing(ann / "curv.txt.gz"),
+                "sulci_json":   _existing(ann / "sulci.json"),
+                "rotation_txt": _existing(ann / "rotation.txt"),
+            }
+            # Fall back to sibling files for any missing companions
+            base   = str(target)[:-4]
+            parent = target.parent
+            if not result["sphere"]:       result["sphere"]       = _existing(base + ".sphere.ply")
+            if not result["sulc"]:         result["sulc"]         = _existing(base + ".sulc.txt.gz")
+            if not result["curv"]:         result["curv"]         = _existing(base + ".curv.txt.gz")
+            if not result["sulci_json"]:   result["sulci_json"]   = _existing(parent / "sulci.json")
+            if not result["rotation_txt"]: result["rotation_txt"] = _existing(parent / "rotation.txt")
+            return jsonify(result)
+
+        # Legacy sibling-file lookup
+        base   = str(target)[:-4]
+        parent = target.parent
         return jsonify({
             "sphere":       _existing(base + ".sphere.ply"),
             "sulc":         _existing(base + ".sulc.txt.gz"),
             "curv":         _existing(base + ".curv.txt.gz"),
-            "sulci_json":   _existing(str(parent / "sulci.json")),
-            "rotation_txt": _existing(str(parent / "rotation.txt")),
+            "sulci_json":   _existing(parent / "sulci.json"),
+            "rotation_txt": _existing(parent / "rotation.txt"),
         })
 
     # ── Raw mesh geometry (vertices + face indices) ───────────────────────────
@@ -131,7 +207,12 @@ def create_app(data_root: str) -> Flask:
             return jsonify({"error": "Forbidden"}), 403
         if not str(target).endswith(".ply"):
             return jsonify({"error": "Not a PLY file"}), 400
-        job_id = jobs.submit(pipeline.spherize, str(target))
+        out_dir = body.get("out_dir") or None
+        if out_dir:
+            out_dir = str(_safe_path(data_root, out_dir, allow_any=True) or "")
+            if not out_dir:
+                return jsonify({"error": "Forbidden: out_dir"}), 403
+        job_id = jobs.submit(pipeline.spherize, str(target), out_dir=out_dir)
         return jsonify({"job_id": job_id})
 
     # ── Curvature ─────────────────────────────────────────────────────────────
@@ -146,7 +227,12 @@ def create_app(data_root: str) -> Flask:
             return jsonify({"error": "Forbidden"}), 403
         if not str(target).endswith(".ply"):
             return jsonify({"error": "Not a PLY file"}), 400
-        job_id = jobs.submit(pipeline.compute_curvature, str(target))
+        out_dir = body.get("out_dir") or None
+        if out_dir:
+            out_dir = str(_safe_path(data_root, out_dir, allow_any=True) or "")
+            if not out_dir:
+                return jsonify({"error": "Forbidden: out_dir"}), 403
+        job_id = jobs.submit(pipeline.compute_curvature, str(target), out_dir=out_dir)
         return jsonify({"job_id": job_id})
 
     # ── Morph ─────────────────────────────────────────────────────────────────
@@ -303,6 +389,164 @@ def create_app(data_root: str) -> Flask:
             return jsonify({"error": "Only .json and .txt files can be saved"}), 400
         target.write_text(content, encoding="utf-8")
         return jsonify({"ok": True})
+
+    # ── Project management ────────────────────────────────────────────────────
+
+    @app.route("/api/project", methods=["GET"])
+    def get_project():
+        root = request.args.get("root", "")
+        if not root:
+            return jsonify({"error": "root required"}), 400
+        proj_file = Path(root) / "project.json"
+        if not proj_file.exists():
+            return jsonify({"error": "No project.json found"}), 404
+        return jsonify(json.loads(proj_file.read_text()))
+
+    @app.route("/api/project/create", methods=["POST", "OPTIONS"])
+    def create_project():
+        if request.method == "OPTIONS":
+            return "", 204
+        body       = request.get_json(force=True)
+        root_dir   = (body.get("root_dir") or "").strip()
+        ref_id     = (body.get("ref_id") or "").strip()
+        ref_source = (body.get("ref_source_path") or "").strip()
+        mov_id     = (body.get("mov_id") or "").strip()
+        mov_source = (body.get("mov_source_path") or "").strip()
+
+        if not all([root_dir, ref_id, ref_source]):
+            return jsonify({"error": "root_dir, ref_id, ref_source_path required"}), 400
+        if mov_id and not mov_source:
+            return jsonify({"error": "mov_source_path required when mov_id is provided"}), 400
+        if mov_id and ref_id == mov_id:
+            return jsonify({"error": "ref_id and mov_id must be different"}), 400
+
+        root = Path(root_dir)
+        now  = datetime.now(timezone.utc).isoformat()
+
+        subjects_to_create = [(ref_id, ref_source)]
+        if mov_id and mov_source:
+            subjects_to_create.append((mov_id, mov_source))
+
+        for subject_id, source_path in subjects_to_create:
+            src = Path(source_path)
+            if not src.exists():
+                return jsonify({"error": f"Source not found: {source_path}"}), 400
+
+            mesh_dir = root / "data" / "raw" / "meshes" / subject_id
+            mesh_dir.mkdir(parents=True, exist_ok=True)
+
+            dst = mesh_dir / "mesh.ply"
+            if str(src).endswith(".gz"):
+                with gzip.open(str(src), "rb") as f_in, open(str(dst), "wb") as f_out:
+                    f_out.write(f_in.read())
+            else:
+                shutil.copy2(str(src), str(dst))
+
+            (mesh_dir / "origin.json").write_text(
+                json.dumps({"source_path": str(src.resolve()), "timestamp": now}, indent=2)
+            )
+            (root / "data" / "derived" / "annotations" / subject_id).mkdir(parents=True, exist_ok=True)
+
+        (root / "data" / "derived" / "matches").mkdir(parents=True, exist_ok=True)
+
+        subjects_list = [ref_id] + ([mov_id] if mov_id else [])
+        project = {"version": "1.0", "created": now, "subjects": subjects_list}
+        (root / "project.json").write_text(json.dumps(project, indent=2))
+
+        return jsonify({"project_root": str(root), "ref_id": ref_id, "mov_id": mov_id or None})
+
+    @app.route("/api/project/add_subject", methods=["POST", "OPTIONS"])
+    def add_subject():
+        if request.method == "OPTIONS":
+            return "", 204
+        body         = request.get_json(force=True)
+        root_dir     = body.get("project_root", "").strip()
+        subject_id   = body.get("subject_id", "").strip()
+        source_path  = body.get("source_path", "").strip()
+
+        if not all([root_dir, subject_id, source_path]):
+            return jsonify({"error": "project_root, subject_id, source_path required"}), 400
+
+        root = Path(root_dir)
+        proj_file = root / "project.json"
+        if not proj_file.exists():
+            return jsonify({"error": "No project.json found at root_dir"}), 404
+
+        src = Path(source_path)
+        if not src.exists():
+            return jsonify({"error": f"Source not found: {source_path}"}), 400
+
+        now      = datetime.now(timezone.utc).isoformat()
+        mesh_dir = root / "data" / "raw" / "meshes" / subject_id
+        mesh_dir.mkdir(parents=True, exist_ok=True)
+
+        dst = mesh_dir / "mesh.ply"
+        if str(src).endswith(".gz"):
+            with gzip.open(str(src), "rb") as f_in, open(str(dst), "wb") as f_out:
+                f_out.write(f_in.read())
+        else:
+            shutil.copy2(str(src), str(dst))
+
+        (mesh_dir / "origin.json").write_text(
+            json.dumps({"source_path": str(src.resolve()), "timestamp": now}, indent=2)
+        )
+        (root / "data" / "derived" / "annotations" / subject_id).mkdir(parents=True, exist_ok=True)
+
+        project = json.loads(proj_file.read_text())
+        if subject_id not in project.get("subjects", []):
+            project.setdefault("subjects", []).append(subject_id)
+            proj_file.write_text(json.dumps(project, indent=2))
+
+        return jsonify({"project_root": str(root), "subject_id": subject_id})
+
+    @app.route("/api/project/subject", methods=["DELETE", "OPTIONS"])
+    def delete_subject():
+        if request.method == "OPTIONS":
+            return "", 204
+        body       = request.get_json(force=True)
+        root_dir   = (body.get("project_root") or "").strip()
+        subject_id = (body.get("subject_id") or "").strip()
+
+        if not all([root_dir, subject_id]):
+            return jsonify({"error": "project_root and subject_id required"}), 400
+
+        root      = Path(root_dir)
+        proj_file = root / "project.json"
+        if not proj_file.exists():
+            return jsonify({"error": "No project.json found at project_root"}), 404
+
+        project = json.loads(proj_file.read_text())
+        if subject_id not in project.get("subjects", []):
+            return jsonify({"error": f"Subject '{subject_id}' not in project"}), 400
+
+        project["subjects"] = [s for s in project["subjects"] if s != subject_id]
+        proj_file.write_text(json.dumps(project, indent=2))
+
+        shutil.rmtree(root / "data" / "raw" / "meshes" / subject_id, ignore_errors=True)
+        shutil.rmtree(root / "data" / "derived" / "annotations" / subject_id, ignore_errors=True)
+
+        return jsonify({"removed": subject_id, "project_root": str(root)})
+
+    @app.route("/api/project/match", methods=["DELETE", "OPTIONS"])
+    def delete_match():
+        if request.method == "OPTIONS":
+            return "", 204
+        body      = request.get_json(force=True)
+        match_dir = (body.get("match_dir") or "").strip()
+
+        if not match_dir:
+            return jsonify({"error": "match_dir required"}), 400
+
+        target = Path(os.path.abspath(match_dir))
+        parts  = target.parts
+        if len(parts) < 4 or parts[-2] != "matches" or parts[-3] != "derived" or parts[-4] != "data":
+            return jsonify({"error": "match_dir is not inside data/derived/matches/"}), 400
+
+        if not target.is_dir():
+            return jsonify({"error": "Directory not found"}), 404
+
+        shutil.rmtree(str(target))
+        return jsonify({"removed": str(target)})
 
     return app
 

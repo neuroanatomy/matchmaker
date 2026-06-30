@@ -1,0 +1,3 @@
+[console_scripts]
+matchmaker = matchmaker.cli:main
+matchmaker-match = matchmaker.cli_match:main

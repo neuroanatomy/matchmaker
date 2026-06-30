@@ -41,6 +41,42 @@ export function meshUrl(filePath) {
     return `${API}/api/mesh?path=${encodeURIComponent(filePath)}`;
 }
 
+export async function createProject(body) {
+    return apiPost('/api/project/create', body);
+}
+
+export async function addSubject(body) {
+    return apiPost('/api/project/add_subject', body);
+}
+
+export async function getProject(root) {
+    return apiGet('/api/project', { root });
+}
+
+export async function deleteSubject(body) {
+    const res = await fetch(API + '/api/project/subject', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`DELETE /api/project/subject → ${res.status}`);
+    return res.json();
+}
+
+export async function getMatches(projectRoot) {
+    return apiGet('/api/matches', { project_root: projectRoot });
+}
+
+export async function deleteMatch(body) {
+    const res = await fetch(API + '/api/project/match', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`DELETE /api/project/match → ${res.status}`);
+    return res.json();
+}
+
 export async function checkHealth() {
     try {
         const data = await apiGet('/health');

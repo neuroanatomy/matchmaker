@@ -64,7 +64,7 @@ def euler_characteristic(f) -> int:
     return nv - ne + nf
 
 
-def spherize(input_path: str, *, progress=None) -> dict:
+def spherize(input_path: str, *, out_dir: str = None, progress=None) -> dict:
     """Spherize a surface PLY mesh.
 
     Steps:
@@ -73,16 +73,23 @@ def spherize(input_path: str, *, progress=None) -> dict:
       3. meshgeometry_mac → Laplace-smoothed normalised sphere
       4. node homogeneous.js → uniform vertex density
 
-    Writes ``input_path`` with ``.ply`` replaced by ``.sphere.ply``.
+    If ``out_dir`` is given, writes ``sphere.ply`` there; otherwise writes
+    ``<stem>.sphere.ply`` alongside the input (legacy behaviour).
     Returns ``{"sphere_path": str, "euler": int}``.
     """
     input_path = str(input_path)
     if not input_path.endswith(".ply"):
         raise ValueError("Input must be a .ply file")
 
-    sphere_path = input_path[:-4] + ".sphere.ply"
     dir_ = os.path.dirname(input_path)
     base = os.path.splitext(os.path.basename(input_path))[0]
+
+    if out_dir is not None:
+        os.makedirs(str(out_dir), exist_ok=True)
+        sphere_path = os.path.join(str(out_dir), "sphere.ply")
+    else:
+        sphere_path = input_path[:-4] + ".sphere.ply"
+
     tmp1 = os.path.join(dir_, f".{base}.mm_tmp1.ply")
     tmp2 = os.path.join(dir_, f".{base}.mm_tmp2.ply")
 
@@ -294,7 +301,7 @@ def run_match(ref_ply, ref_sphere, ref_rot,
     return {"matched_ply": matched_ply, "matched_sphere": matched_sphere}
 
 
-def compute_curvature(mesh_path: str, *, progress=None) -> dict:
+def compute_curvature(mesh_path: str, *, out_dir: str = None, progress=None) -> dict:
     """Compute mean curvature and sulcal depth for a surface PLY mesh.
 
     Runs a single meshgeometry call:
@@ -302,7 +309,8 @@ def compute_curvature(mesh_path: str, *, progress=None) -> dict:
       -curv  -oformat txt1             → per-vertex mean curvature
       -icurv 20  -oformat txt1         → integrated curvature (sulcal depth, 20 diffusion steps)
 
-    Writes ``<base>.curv.txt.gz`` and ``<base>.sulc.txt.gz`` next to the input.
+    If ``out_dir`` is given, writes ``curv.txt.gz`` and ``sulc.txt.gz`` there;
+    otherwise writes ``<base>.curv/sulc.txt.gz`` alongside the input (legacy).
     Returns ``{"curv_path": str, "sulc_path": str}``.
     """
     mesh_path = str(mesh_path)
@@ -316,8 +324,14 @@ def compute_curvature(mesh_path: str, *, progress=None) -> dict:
     tmp_ply  = os.path.join(dir_, f".{base}.mm_curv_tmp.ply")
     curv_txt = os.path.join(dir_, f"{base}.curv.txt")
     sulc_txt = os.path.join(dir_, f"{base}.sulc.txt")
-    curv_gz  = curv_txt + ".gz"
-    sulc_gz  = sulc_txt + ".gz"
+
+    if out_dir is not None:
+        os.makedirs(str(out_dir), exist_ok=True)
+        curv_gz = os.path.join(str(out_dir), "curv.txt.gz")
+        sulc_gz = os.path.join(str(out_dir), "sulc.txt.gz")
+    else:
+        curv_gz = curv_txt + ".gz"
+        sulc_gz = sulc_txt + ".gz"
 
     def _emit(p):
         if progress:
