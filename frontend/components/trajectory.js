@@ -33,9 +33,11 @@ export class TrajectoryPlayer {
     #t = 0;            // current normalised time [0, 1]
     #playing = false;
     #rafId = null;
-    #speed = 4.0;      // full-cycle seconds; increase for slower playback
+    #speed = 4.0;      // one-direction seconds; increase for slower playback
     #lastTs = null;
     #onSeek = null;    // callback(t) called after each seek
+    #pingPong = false; // forth-and-back mode
+    #direction = 1;    // 1 = forward, -1 = backward (ping-pong only)
 
     constructor(viewer) {
         this.#viewer = viewer;
@@ -47,6 +49,8 @@ export class TrajectoryPlayer {
     get isPlaying() { return this.#playing; }
     get speed() { return this.#speed; }
     set speed(s) { this.#speed = s; }
+    get pingPong() { return this.#pingPong; }
+    set pingPong(v) { this.#pingPong = v; if (v && this.#t >= 1) this.#direction = -1; }
 
     /** Register a callback invoked each time seek() is called. */
     onSeek(fn) { this.#onSeek = fn; }
@@ -174,6 +178,13 @@ export class TrajectoryPlayer {
         if (this.#rafId) { cancelAnimationFrame(this.#rafId); this.#rafId = null; }
     }
 
+    /** Re-register the existing geometry with a viewer after clearAll(). */
+    reattach(viewer) {
+        if (!this.#geometry) return;
+        this.#mesh = viewer.setTrajectoryGeometry(this.#geometry);
+        this.seek(this.#t);
+    }
+
     dispose() {
         this.pause();
         this.#geometry?.dispose();
@@ -190,10 +201,15 @@ export class TrajectoryPlayer {
         const dt = (ts - this.#lastTs) / 1000; // seconds
         this.#lastTs = ts;
 
-        // Ping-pong loop
-        let t = this.#t + dt / this.#speed;
-        if (t > 1) t = 2 - t;
-        if (t < 0) t = -t;
-        this.seek(t);
+        if (this.#pingPong) {
+            let t = this.#t + this.#direction * dt / this.#speed;
+            if (t >= 1) { t = 1; this.#direction = -1; }
+            else if (t <= 0) { t = 0; this.#direction = 1; }
+            this.seek(t);
+        } else {
+            // Forward loop — restart from 0 on reaching the end
+            let t = (this.#t + dt / this.#speed) % 1;
+            this.seek(t);
+        }
     }
 }

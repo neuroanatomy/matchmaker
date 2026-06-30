@@ -4,7 +4,7 @@ import { TrajectoryPlayer } from './components/trajectory.js';
 import { StereographicOverlay } from './components/stereographic.js';
 import { StereoView } from './components/stereoview.js';
 
-import { meshUrl, checkHealth, getConfig, apiGet, apiPost, apiPut, pollJob, createProject, addSubject, getProject, deleteSubject, getMatches, deleteMatch } from './api.js';
+import { meshUrl, checkHealth, getConfig, apiGet, apiPost, apiPut, pollJob, createProject, addSubject, getProject, deleteSubject, getMatches, deleteMatch, getTrajectories, startTrajectory, deleteTrajectory } from './api.js';
 import { ProjectModal, AddSubjectModal } from './components/projectmodal.js';
 import { resampleMesh, parseRotMat, rotateVertsVR } from './components/morph.js';
 
@@ -43,6 +43,17 @@ window.app = (() => {
     let morphSurface    = null;
     let matchSurface    = null;
     let morphInterpT    = 0;
+
+    // ── View / Trajectory step ────────────────────────────────────────────────
+    let existingTrajectories = [];   // [{name, dir, n_frames, done, params}]
+    let trajSeq              = [];   // ordered subject IDs oldest→youngest for new trajectory
+    let trajMode             = 'raw';
+    let trajNDeformSmooth    = 5;
+    let trajDoIcp            = false;
+    let trajNTrajSmooth      = 1;
+    let trajNSpatialSmooth   = 1;
+    let trajLambdaSpatial    = 0.005;
+    let loadedTrajDir        = null; // which trajectory is currently in the player
 
     // ── Align step ────────────────────────────────────────────────────────────
     let alignSubjectId        = null;
@@ -114,11 +125,23 @@ window.app = (() => {
         if (prev === 4 && n !== 4) {
             viewer.clearAll();
         }
+        if (prev === 5 && n !== 5) {
+            player?.pause();
+            viewer.clearAll();
+            _showTrajectoryBar(false);
+        }
         currentStep = n;
         _activateStep(n);
         renderStep(n);
         if (n === 4 && prev !== 4) {
             _refreshMatchViewer();
+        }
+        if (n === 5 && prev !== 5) {
+            viewer.clearAll();
+            if (player?.isLoaded) {
+                player.reattach(viewer);
+                _showTrajectoryBar(true);
+            }
         }
         if (prev === 4 && (n === 1 || n === 2) && viewedSubjectId && viewState[viewedSubjectId]?.meshType) {
             _refreshViewer({ preserveOrientation: false });
@@ -135,8 +158,6 @@ window.app = (() => {
         const rpanel = document.getElementById('rpanel-content');
         const h2     = document.querySelector('#rpanel h2');
 
-        _showTrajectoryBar(n === 5 && player?.isLoaded);
-
         if (n === 1) {
             h2.textContent = 'Load meshes';
             _renderLoadPanel(rpanel);
@@ -151,7 +172,8 @@ window.app = (() => {
             _loadExistingMatches().then(() => _renderMatchPanel(rpanel));
         } else if (n === 5) {
             h2.textContent = 'Trajectory';
-            _renderTrajectoryPanel(rpanel);
+            Promise.all([_loadExistingTrajectories(), _loadExistingMatches()])
+                .then(() => _renderTrajectoryPanel(rpanel));
         } else {
             const labels = ['', 'Load', 'Preprocess', 'Align', 'Match', 'View'];
             h2.textContent = labels[n] || `Step ${n}`;
@@ -1779,36 +1801,387 @@ window.app = (() => {
         rowEl.appendChild(confirmEl);
     }
 
-    // ── Step 5 — Trajectory player ───────────────────────────────────────────
+    // ── Step 5 — Trajectory ──────────────────────────────────────────────────
+
+    async function _loadExistingTrajectories() {
+        if (!projectRoot) { existingTrajectories = []; return; }
+        try { existingTrajectories = await getTrajectories(projectRoot); }
+        catch { existingTrajectories = []; }
+    }
+
     function _renderTrajectoryPanel(container) {
         container.innerHTML = '';
 
-        if (!player) {
-            player = new TrajectoryPlayer(viewer);
-            player.onSeek(t => _updateScrubber(t));
-            window._player = player;
+        // ── Existing trajectories roster ─────────────────────────────────────
+        if (existingTrajectories.length > 0) {
+            const sec = _el('div', { className: 'sph-section' });
+            const hdr = _el('div', { className: 'sph-label' });
+            hdr.textContent = 'Existing trajectories';
+            sec.appendChild(hdr);
+
+            existingTrajectories.forEach(t => {
+                const row = _el('div', { className: 'match-roster-row' });
+
+                const nameEl = _el('span', { className: 'match-roster-name' });
+                nameEl.textContent = t.name;
+                nameEl.title = t.params?.seq?.join(' → ') || t.name;
+                row.appendChild(nameEl);
+
+                const info = _el('span', { className: 'match-roster-status' });
+                const mode = t.params?.mode || 'raw';
+                info.textContent = `${t.n_frames} frames · ${mode}`;
+                row.appendChild(info);
+
+                const loadBtn = _el('button', { className: 'roster-load-btn' });
+                loadBtn.textContent = loadedTrajDir === t.dir ? 'Loaded' : 'Load';
+                loadBtn.disabled = !t.done || loadedTrajDir === t.dir;
+                loadBtn.setAttribute('aria-label', `Load trajectory ${t.name}`);
+                loadBtn.onclick = () => _loadTrajectoryFromDisk(t);
+                row.appendChild(loadBtn);
+
+                const delBtn = _el('button', { className: 'roster-del-btn' });
+                delBtn.textContent = '✕';
+                delBtn.setAttribute('aria-label', `Delete trajectory ${t.name}`);
+                delBtn.onclick = () => _confirmDeleteTrajectory(t, row, sec);
+                row.appendChild(delBtn);
+
+                sec.appendChild(row);
+            });
+
+            container.appendChild(sec);
+            container.appendChild(_el('div', { className: 'sph-divider' }));
         }
 
-        const demoBtn = _el('button', { className: 'load-btn' });
-        demoBtn.textContent = 'Load demo trajectory';
-        demoBtn.onclick = () => _loadTrajectoryDemo();
-        container.appendChild(demoBtn);
+        // ── New trajectory ────────────────────────────────────────────────────
+        if (projectRoot) {
+            const newSec = _el('div', { className: 'sph-section' });
+            const newHdr = _el('div', { className: 'sph-label' });
+            newHdr.textContent = 'New trajectory';
+            newSec.appendChild(newHdr);
 
-        if (player.isLoaded) {
+            // Sequence list
+            const seqLabel = _el('div', { className: 'traj-seq-label' });
+            seqLabel.textContent = 'Sequence (oldest → youngest)';
+            newSec.appendChild(seqLabel);
+
+            const seqList = _el('div', { className: 'traj-seq-list' });
+            trajSeq.forEach((id, i) => {
+                const pill = _el('div', { className: 'traj-seq-row' });
+
+                const idEl = _el('span', { className: 'traj-seq-id' });
+                idEl.textContent = id;
+                pill.appendChild(idEl);
+
+                const upBtn = _el('button', { className: 'traj-seq-btn' });
+                upBtn.textContent = '▲'; upBtn.title = 'Move up';
+                upBtn.disabled = i === 0;
+                upBtn.onclick = () => { trajSeq.splice(i - 1, 0, trajSeq.splice(i, 1)[0]); renderStep(currentStep); };
+                pill.appendChild(upBtn);
+
+                const dnBtn = _el('button', { className: 'traj-seq-btn' });
+                dnBtn.textContent = '▼'; dnBtn.title = 'Move down';
+                dnBtn.disabled = i === trajSeq.length - 1;
+                dnBtn.onclick = () => { trajSeq.splice(i + 1, 0, trajSeq.splice(i, 1)[0]); renderStep(currentStep); };
+                pill.appendChild(dnBtn);
+
+                const rmBtn = _el('button', { className: 'traj-seq-btn traj-seq-rm' });
+                rmBtn.textContent = '✕';
+                rmBtn.onclick = () => { trajSeq.splice(i, 1); renderStep(currentStep); };
+                pill.appendChild(rmBtn);
+
+                seqList.appendChild(pill);
+            });
+
+            // Add subject row
+            const addRow = _el('div', { className: 'traj-add-row' });
+            const addSel = _el('select', { className: 'traj-add-select', id: 'traj-add-subject' });
+            const blankOpt = _el('option');
+            blankOpt.value = ''; blankOpt.textContent = '— add subject —';
+            addSel.appendChild(blankOpt);
+            subjectOrder.forEach(sid => {
+                if (trajSeq.includes(sid)) return;
+                const opt = _el('option');
+                opt.value = sid; opt.textContent = sid;
+                addSel.appendChild(opt);
+            });
+            addSel.onchange = () => {
+                if (addSel.value) { trajSeq.push(addSel.value); renderStep(currentStep); }
+            };
+            addRow.appendChild(addSel);
+            seqList.appendChild(addRow);
+            newSec.appendChild(seqList);
+
+            // Required pairs validation
+            if (trajSeq.length >= 2) {
+                const pairsDiv = _el('div', { className: 'traj-pairs' });
+                const pairsLbl = _el('div', { className: 'sph-label' });
+                pairsLbl.textContent = 'Required matches';
+                pairsLbl.style.marginTop = '6px';
+                pairsDiv.appendChild(pairsLbl);
+
+                let allPairsOk = true;
+                for (let i = 0; i < trajSeq.length - 1; i++) {
+                    const ref    = trajSeq[i];
+                    const mov    = trajSeq[i + 1];
+                    const fwdOk  = existingMatches.some(m => m.mov_id === mov && m.ref_id === ref && m.has_match);
+                    const invOk  = !fwdOk && existingMatches.some(m => m.mov_id === ref && m.ref_id === mov && m.has_match);
+                    const ok     = fwdOk || invOk;
+                    if (!ok) allPairsOk = false;
+                    const icon   = ok ? '◉' : '○';
+                    const label  = invOk ? `${ref}_as_${mov} (inv)` : `${mov}_as_${ref}`;
+                    const cls    = fwdOk ? 'traj-pair-ok' : (invOk ? 'traj-pair-inv' : 'traj-pair-miss');
+                    const pairRow = _el('div', { className: 'traj-pair-row' });
+                    pairRow.innerHTML = `<span class="traj-pair-icon">${icon}</span>
+                        <span class="traj-pair-name ${cls}">${label}</span>`;
+                    pairsDiv.appendChild(pairRow);
+                }
+                newSec.appendChild(pairsDiv);
+
+                // Mode selector
+                const modeRow = _el('div', { className: 'param-row' });
+                const modeLbl = _el('span', { className: 'param-label' });
+                modeLbl.textContent = 'Mode';
+                modeRow.appendChild(modeLbl);
+                const modeGrp = _el('div', { className: 'steps-group' });
+                ['raw', 'smooth'].forEach(m => {
+                    const btn = _el('button', { className: `step-seg${trajMode === m ? ' active' : ''}` });
+                    btn.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+                    btn.onclick = () => { trajMode = m; renderStep(currentStep); };
+                    modeGrp.appendChild(btn);
+                });
+                modeRow.appendChild(modeGrp);
+                newSec.appendChild(modeRow);
+
+                // Advanced parameters (smooth mode only)
+                if (trajMode === 'smooth') {
+                    const adv = _el('details', { className: 'advanced-details' });
+                    const sum = _el('summary');
+                    sum.textContent = 'Advanced';
+                    adv.appendChild(sum);
+
+                    const _paramRow = (label, get, set, min, max, step) => {
+                        const row = _el('div', { className: 'param-row' });
+                        const lbl = _el('span', { className: 'param-label' }); lbl.textContent = label; row.appendChild(lbl);
+                        const slider = _el('input'); slider.type = 'range'; slider.min = min; slider.max = max; slider.step = step; slider.value = get();
+                        const num = _el('input', { type: 'number', className: 'param-val' }); num.min = min; num.max = max; num.step = step; num.value = get();
+                        slider.oninput = () => { set(parseFloat(slider.value)); num.value = slider.value; };
+                        num.oninput = () => { const v = Math.min(max, Math.max(min, parseFloat(num.value) || min)); set(v); slider.value = v; };
+                        row.appendChild(slider); row.appendChild(num);
+                        return row;
+                    };
+
+                    adv.appendChild(_paramRow('Deform smooth', () => trajNDeformSmooth, v => { trajNDeformSmooth = v; }, 0, 20, 1));
+                    adv.appendChild(_paramRow('Traj smooth', () => trajNTrajSmooth, v => { trajNTrajSmooth = v; }, 0, 10, 1));
+                    adv.appendChild(_paramRow('Spatial smooth', () => trajNSpatialSmooth, v => { trajNSpatialSmooth = v; }, 0, 10, 1));
+                    adv.appendChild(_paramRow('λ spatial', () => trajLambdaSpatial, v => { trajLambdaSpatial = v; }, 0.001, 0.1, 0.001));
+
+                    const icpRow = _el('div', { className: 'param-row' });
+                    const icpLbl = _el('span', { className: 'param-label' }); icpLbl.textContent = 'ICP align'; icpRow.appendChild(icpLbl);
+                    const icpCb = _el('input'); icpCb.type = 'checkbox'; icpCb.checked = trajDoIcp;
+                    icpCb.onchange = () => { trajDoIcp = icpCb.checked; };
+                    icpRow.appendChild(icpCb);
+                    adv.appendChild(icpRow);
+
+                    newSec.appendChild(adv);
+                }
+
+                // Run button
+                const runBtn = _el('button', { className: 'load-btn', style: 'margin-top:8px' });
+                runBtn.textContent = 'Run Trajectory';
+                runBtn.disabled = !allPairsOk;
+                runBtn.onclick = () => _runTrajectory();
+                newSec.appendChild(runBtn);
+            } else {
+                const hint = _el('div', { className: 'match-desc' });
+                hint.textContent = 'Add ≥ 2 subjects to define a trajectory sequence.';
+                newSec.appendChild(hint);
+            }
+
+            container.appendChild(newSec);
+            container.appendChild(_el('div', { className: 'sph-divider' }));
+        }
+
+        // ── Playback ──────────────────────────────────────────────────────────
+        const playSec = _el('div', { className: 'sph-section' });
+        const playHdr = _el('div', { className: 'sph-label' });
+        playHdr.textContent = 'Playback';
+        playSec.appendChild(playHdr);
+
+        if (!projectRoot && !player?.isLoaded) {
+            const demoBtn = _el('button', { className: 'load-btn' });
+            demoBtn.textContent = 'Load demo trajectory';
+            demoBtn.onclick = () => _loadTrajectoryDemo();
+            playSec.appendChild(demoBtn);
+        }
+
+        if (player?.isLoaded) {
             const info = _el('div', { className: 'traj-info' });
-            info.textContent = `${player.frameCount} frames loaded`;
-            container.appendChild(info);
+            info.textContent = `${player.frameCount} frames`;
+            if (loadedTrajDir) {
+                const traj = existingTrajectories.find(t => t.dir === loadedTrajDir);
+                if (traj) info.textContent += ` · ${traj.name}`;
+            }
+            playSec.appendChild(info);
+
+            // Play/pause + scrubber row
+            const ctrlRow = _el('div', { className: 'traj-ctrl-row' });
+
+            const playBtn = _el('button', { className: 'traj-play-rp', id: 'rp-traj-play' });
+            playBtn.textContent = player.isPlaying ? '⏸' : '▶';
+            playBtn.title = 'Play / Pause';
+            playBtn.setAttribute('aria-label', 'Play / Pause trajectory');
+            playBtn.onclick = () => {
+                if (player.isPlaying) { player.pause(); playBtn.textContent = '▶'; }
+                else                   { player.play();  playBtn.textContent = '⏸'; }
+            };
+            ctrlRow.appendChild(playBtn);
+
+            const scrubber = _el('input');
+            scrubber.type = 'range'; scrubber.id = 'rp-traj-scrubber';
+            scrubber.className = 'traj-scrub-rp';
+            scrubber.min = '0'; scrubber.max = '1000'; scrubber.step = '1';
+            scrubber.value = String(Math.round(player.t * 1000));
+            scrubber.setAttribute('aria-label', 'Trajectory position');
+            scrubber.oninput = () => {
+                const t = parseInt(scrubber.value) / 1000;
+                document.getElementById('rp-traj-time').textContent = t.toFixed(2);
+                player.seek(t);
+            };
+            ctrlRow.appendChild(scrubber);
+
+            const timeEl = _el('span', { className: 'traj-time-rp', id: 'rp-traj-time' });
+            timeEl.textContent = player.t.toFixed(2);
+            ctrlRow.appendChild(timeEl);
+            playSec.appendChild(ctrlRow);
 
             const speedRow = _el('div', { className: 'traj-row' });
             speedRow.innerHTML = '<label>Speed</label>';
             const speedInput = _el('input');
-            speedInput.type = 'range';
-            speedInput.min = '1'; speedInput.max = '12'; speedInput.step = '0.5';
-            speedInput.value = '4'; speedInput.className = 'traj-speed';
-            speedInput.oninput = () => { player.speed = parseFloat(speedInput.value); };
+            speedInput.type = 'range'; speedInput.min = '1'; speedInput.max = '12';
+            speedInput.step = '0.5';
+            // player.speed is one-direction duration (seconds); invert so slider right = faster
+            speedInput.value = String(13 - player.speed);
+            speedInput.className = 'traj-speed';
+            speedInput.oninput = () => { player.speed = 13 - parseFloat(speedInput.value); };
             speedRow.appendChild(speedInput);
-            container.appendChild(speedRow);
+            playSec.appendChild(speedRow);
+
+            const ppRow = _el('div', { className: 'traj-row' });
+            const ppLabel = _el('label', { className: 'traj-pp-label' });
+            const ppCheck = _el('input');
+            ppCheck.type = 'checkbox'; ppCheck.id = 'rp-traj-pingpong';
+            ppCheck.checked = player.pingPong;
+            ppCheck.setAttribute('aria-label', 'Forth and back playback');
+            ppCheck.onchange = () => { player.pingPong = ppCheck.checked; };
+            ppLabel.appendChild(ppCheck);
+            ppLabel.append(' Forth & back');
+            ppRow.appendChild(ppLabel);
+            playSec.appendChild(ppRow);
+        } else {
+            const hint = _el('div', { className: 'match-desc' });
+            hint.textContent = 'No trajectory loaded.';
+            playSec.appendChild(hint);
         }
+
+        container.appendChild(playSec);
+    }
+
+    async function _loadTrajectoryFromDisk(traj) {
+        _setStatus(`Loading trajectory ${traj.name}…`);
+        try {
+            const trajPath = traj.dir + '/trajectory';
+            const files = await apiGet('/api/files', { dir: trajPath });
+            const urls = files
+                .filter(f => f.name.endsWith('.ply'))
+                .sort((a, b) => parseInt(a.name) - parseInt(b.name))
+                .map(f => meshUrl(f.path));
+            if (!urls.length) throw new Error('No PLY frames found in trajectory/');
+            if (!player) {
+                player = new TrajectoryPlayer(viewer);
+                player.onSeek(t => _updateScrubber(t));
+                window._player = player;
+            }
+            await player.load(urls);
+            loadedTrajDir = traj.dir;
+            // Populate the builder form from saved params so user can recompute
+            if (traj.params) {
+                const p = traj.params;
+                if (Array.isArray(p.seq) && p.seq.length >= 2) trajSeq = [...p.seq];
+                if (p.mode === 'raw' || p.mode === 'smooth') trajMode = p.mode;
+                if (p.n_deformation_smooth != null) trajNDeformSmooth = p.n_deformation_smooth;
+                if (p.do_icp != null)               trajDoIcp         = !!p.do_icp;
+                if (p.n_trajectory_smooth != null)  trajNTrajSmooth   = p.n_trajectory_smooth;
+                if (p.n_spatial_smooth != null)     trajNSpatialSmooth = p.n_spatial_smooth;
+                if (p.lambda_spatial != null)       trajLambdaSpatial  = p.lambda_spatial;
+            }
+            _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
+            _showTrajectoryBar(true);
+            renderStep(currentStep);
+        } catch (e) {
+            _setStatus(`Trajectory load error: ${e.message}`);
+        }
+    }
+
+    async function _runTrajectory() {
+        if (!projectRoot || trajSeq.length < 2) return;
+        const suffix    = trajMode === 'smooth' ? '_smooth' : '';
+        const traj_name = trajSeq.join('-') + suffix;
+        _setStatus('Submitting trajectory job…');
+        try {
+            const { job_id, out_dir } = await startTrajectory({
+                project_root:        projectRoot,
+                seq:                 trajSeq,
+                traj_name,
+                mode:                trajMode,
+                n_deformation_smooth: trajNDeformSmooth,
+                do_icp:              trajDoIcp,
+                n_trajectory_smooth: trajNTrajSmooth,
+                n_spatial_smooth:    trajNSpatialSmooth,
+                lambda_spatial:      trajLambdaSpatial,
+            });
+            await pollJob(job_id, { onProgress: p => _setStatus(`Trajectory: ${Math.round(p * 100)}%`) });
+            _setStatus('Trajectory done — loading…');
+            await _loadExistingTrajectories();
+            const traj = existingTrajectories.find(t => t.dir === out_dir);
+            if (traj) await _loadTrajectoryFromDisk(traj);
+            else renderStep(currentStep);
+        } catch (e) {
+            _setStatus(`Trajectory error: ${e.message}`);
+            renderStep(currentStep);
+        }
+    }
+
+    function _confirmDeleteTrajectory(traj, rowEl, secEl) {
+        const existing = rowEl.querySelector('.remove-confirm');
+        if (existing) { existing.remove(); return; }
+
+        const confirmEl = _el('div', { className: 'remove-confirm' });
+        confirmEl.textContent = `Delete ${traj.name}? `;
+
+        const yesBtn = _el('button', { className: 'remove-confirm-yes' });
+        yesBtn.textContent = 'Delete';
+        yesBtn.onclick = async e => {
+            e.stopPropagation();
+            try { await deleteTrajectory(traj.dir); } catch { /* still remove row */ }
+            rowEl.remove();
+            existingTrajectories = existingTrajectories.filter(t => t.dir !== traj.dir);
+            if (loadedTrajDir === traj.dir) {
+                player?.dispose(); player = null; loadedTrajDir = null;
+                _renderTrajectoryPanel(document.getElementById('rpanel-content'));
+            }
+            if (secEl.querySelectorAll('.match-roster-row').length === 0) {
+                secEl.remove();
+            }
+            _setStatus(`Deleted ${traj.name}`);
+        };
+        confirmEl.appendChild(yesBtn);
+
+        const noBtn = _el('button', { className: 'remove-confirm-no' });
+        noBtn.textContent = 'Cancel';
+        noBtn.onclick = e => { e.stopPropagation(); confirmEl.remove(); };
+        confirmEl.appendChild(noBtn);
+
+        rowEl.appendChild(confirmEl);
     }
 
     async function _loadTrajectoryDemo() {
@@ -1821,6 +2194,7 @@ window.app = (() => {
             }
             window._player = player;
             await player.load(urls);
+            loadedTrajDir = null;
             _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
             _showTrajectoryBar(true);
             _renderTrajectoryPanel(document.getElementById('rpanel-content'));
@@ -1829,17 +2203,16 @@ window.app = (() => {
         }
     }
 
-    // ── Trajectory status bar ────────────────────────────────────────────────
-    function _showTrajectoryBar(show) {
-        document.getElementById('traj-bar').style.display = show ? 'flex' : 'none';
-        document.getElementById('statusbar').style.display = show ? 'none' : 'flex';
-    }
+    // ── Trajectory helpers ───────────────────────────────────────────────────
+    function _showTrajectoryBar(_show) { /* scrubber now lives in the right panel */ }
 
     function _updateScrubber(t) {
-        const scrubber = document.getElementById('traj-scrubber');
+        const scrubber = document.getElementById('rp-traj-scrubber');
         if (scrubber) scrubber.value = Math.round(t * 1000);
-        const timeEl = document.getElementById('traj-time');
+        const timeEl = document.getElementById('rp-traj-time');
         if (timeEl) timeEl.textContent = t.toFixed(2);
+        const playBtn = document.getElementById('rp-traj-play');
+        if (playBtn && player) playBtn.textContent = player.isPlaying ? '⏸' : '▶';
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

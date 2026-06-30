@@ -448,6 +448,7 @@ def create_app(data_root: str) -> Flask:
             (root / "data" / "derived" / "annotations" / subject_id).mkdir(parents=True, exist_ok=True)
 
         (root / "data" / "derived" / "matches").mkdir(parents=True, exist_ok=True)
+        (root / "data" / "derived" / "trajectories").mkdir(parents=True, exist_ok=True)
 
         subjects_list = [ref_id] + ([mov_id] if mov_id else [])
         project = {"version": "1.0", "created": now, "subjects": subjects_list}
@@ -526,6 +527,117 @@ def create_app(data_root: str) -> Flask:
         shutil.rmtree(root / "data" / "derived" / "annotations" / subject_id, ignore_errors=True)
 
         return jsonify({"removed": subject_id, "project_root": str(root)})
+
+    # ── Trajectory roster ─────────────────────────────────────────────────────
+
+    @app.route("/api/trajectories")
+    def list_trajectories():
+        project_root = request.args.get("project_root", "").strip()
+        if not project_root:
+            return jsonify({"error": "project_root required"}), 400
+
+        traj_dir = Path(os.path.abspath(project_root)) / "data" / "derived" / "trajectories"
+        if not traj_dir.is_dir():
+            return jsonify([])
+
+        results = []
+        for entry in sorted(traj_dir.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            params = None
+            params_file = entry / "params.json"
+            if params_file.exists():
+                try:
+                    params = json.loads(params_file.read_text())
+                except Exception:
+                    pass
+            traj_subdir = entry / "trajectory"
+            n_frames = len(list(traj_subdir.glob("*.ply"))) if traj_subdir.is_dir() else 0
+            results.append({
+                "name":     entry.name,
+                "dir":      str(entry),
+                "n_frames": n_frames,
+                "done":     n_frames > 0,
+                "params":   params,
+            })
+
+        return jsonify(results)
+
+    @app.route("/api/trajectory", methods=["POST", "OPTIONS"])
+    def build_trajectory():
+        if request.method == "OPTIONS":
+            return "", 204
+        body         = request.get_json(force=True)
+        project_root = (body.get("project_root") or "").strip()
+        seq          = body.get("seq") or []
+        traj_name    = (body.get("traj_name") or "").strip()
+        mode         = body.get("mode", "raw")
+
+        if not project_root or len(seq) < 2:
+            return jsonify({"error": "project_root and seq (≥2 subjects) required"}), 400
+
+        if not traj_name:
+            suffix = "_smooth" if mode == "smooth" else ""
+            traj_name = "-".join(seq) + suffix
+
+        out_dir = str(
+            Path(os.path.abspath(project_root)) / "data" / "derived" / "trajectories" / traj_name
+        )
+
+        # Validate that required adjacent-pair matches exist (forward or inverse)
+        matches_base = Path(os.path.abspath(project_root)) / "data" / "derived" / "matches"
+        for ref, mov in zip(seq, seq[1:]):
+            fwd_dir = matches_base / f"{mov}_as_{ref}"
+            inv_dir = matches_base / f"{ref}_as_{mov}"
+            if (fwd_dir / "surf.0.ply").exists():
+                pass  # forward match available
+            elif (inv_dir / "surf.0.ply").exists():
+                pass  # inverse match accepted; ref_surf.ply computed on the fly if absent
+            else:
+                return jsonify({
+                    "error": f"No match found for {mov}_as_{ref} (tried both directions)"
+                }), 400
+
+        params = {
+            k: body.get(k, default)
+            for k, default in [
+                ("n_deformation_smooth", 5),
+                ("do_icp", False),
+                ("n_trajectory_smooth", 1),
+                ("n_spatial_smooth", 1),
+                ("lambda_spatial", 0.005),
+            ]
+        }
+
+        job_id = jobs.submit(
+            pipeline.run_trajectory,
+            project_root, seq, out_dir, mode=mode, **params,
+        )
+        return jsonify({"job_id": job_id, "out_dir": out_dir, "traj_name": traj_name})
+
+    @app.route("/api/project/trajectory", methods=["DELETE", "OPTIONS"])
+    def delete_trajectory():
+        if request.method == "OPTIONS":
+            return "", 204
+        body     = request.get_json(force=True)
+        traj_dir = (body.get("traj_dir") or "").strip()
+
+        if not traj_dir:
+            return jsonify({"error": "traj_dir required"}), 400
+
+        target = Path(os.path.abspath(traj_dir))
+        parts  = target.parts
+        if (len(parts) < 4
+                or parts[-2] != "trajectories"
+                or parts[-3] != "derived"
+                or parts[-4] != "data"):
+            return jsonify({"error": "traj_dir is not inside data/derived/trajectories/"}), 400
+
+        if not target.is_dir():
+            return jsonify({"error": "Directory not found"}), 404
+
+        shutil.rmtree(str(target))
+        return jsonify({"removed": str(target)})
 
     @app.route("/api/project/match", methods=["DELETE", "OPTIONS"])
     def delete_match():

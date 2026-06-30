@@ -37,6 +37,16 @@ export async function apiPut(path, body = {}) {
     return res.json();
 }
 
+export async function apiDelete(path, body = {}) {
+    const res = await fetch(API + path, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`DELETE ${path} → ${res.status}`);
+    return res.json();
+}
+
 export function meshUrl(filePath) {
     return `${API}/api/mesh?path=${encodeURIComponent(filePath)}`;
 }
@@ -75,6 +85,18 @@ export async function deleteMatch(body) {
     });
     if (!res.ok) throw new Error(`DELETE /api/project/match → ${res.status}`);
     return res.json();
+}
+
+export async function getTrajectories(projectRoot) {
+    return apiGet('/api/trajectories', { project_root: projectRoot });
+}
+
+export async function startTrajectory(params) {
+    return apiPost('/api/trajectory', params);
+}
+
+export async function deleteTrajectory(trajDir) {
+    return apiDelete('/api/project/trajectory', { traj_dir: trajDir });
 }
 
 export async function checkHealth() {
