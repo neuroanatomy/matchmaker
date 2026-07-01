@@ -1,3 +1,4 @@
+import { el, setStatus, preItem } from './dom-helpers.js';
 import { Viewer3D } from './components/viewer3d.js';
 import { FileBrowser } from './components/filebrowser.js';
 import { TrajectoryPlayer } from './components/trajectory.js';
@@ -188,25 +189,25 @@ window.app = (() => {
 
         // Subject roster
         if (subjectOrder.length > 0) {
-            const roster = _el('div', { className: 'subject-roster' });
+            const roster = el('div', { className: 'subject-roster' });
             subjectOrder.forEach(id => {
                 const s   = subjects[id];
-                const row = _el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
+                const row = el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
                 row.dataset.subjectId = id;
 
-                const info = _el('div', { className: 'subject-row-info' });
+                const info = el('div', { className: 'subject-row-info' });
 
-                const idEl = _el('span', { className: 'subject-row-id' });
+                const idEl = el('span', { className: 'subject-row-id' });
                 idEl.textContent = id;
                 info.appendChild(idEl);
 
-                const fileEl = _el('span', { className: 'subject-row-file' });
+                const fileEl = el('span', { className: 'subject-row-file' });
                 fileEl.textContent = s.path ? '  ' + s.path.split('/').pop() : '';
                 info.appendChild(fileEl);
 
-                const dots = _el('span', { className: 'subject-dots' });
+                const dots = el('span', { className: 'subject-dots' });
                 const _dot = (present, title) => {
-                    const d = _el('span', { className: `dot${present ? ' dot-on' : ''}`, title });
+                    const d = el('span', { className: `dot${present ? ' dot-on' : ''}`, title });
                     d.textContent = '●';
                     return d;
                 };
@@ -217,7 +218,7 @@ window.app = (() => {
 
                 row.appendChild(info);
 
-                const rmBtn = _el('button', { className: 'remove-btn' });
+                const rmBtn = el('button', { className: 'remove-btn' });
                 rmBtn.textContent = '×';
                 rmBtn.title = `Remove ${id}`;
                 rmBtn.onclick = e => { e.stopPropagation(); _confirmRemoveSubject(id, row); };
@@ -246,9 +247,9 @@ window.app = (() => {
             const vs  = viewState[id] || (viewState[id] = { meshType: null, texType: null });
             const isView = viewedSubjectId === id;
 
-            const viewSec = _el('div', { className: 'view-section' });
+            const viewSec = el('div', { className: 'view-section' });
 
-            const nativeEl = _el('div', { className: 'sph-item sph-clickable' });
+            const nativeEl = el('div', { className: 'sph-item sph-clickable' });
             const nativeOn = isView && vs.meshType === 'native';
             nativeEl.classList.toggle('sph-item-active', nativeOn);
             nativeEl.textContent = (nativeOn ? '▶ ' : '  ') + s.path.split('/').pop();
@@ -256,7 +257,7 @@ window.app = (() => {
             viewSec.appendChild(nativeEl);
 
             if (s.sphere) {
-                const sphereEl = _el('div', { className: 'sph-item sph-clickable' });
+                const sphereEl = el('div', { className: 'sph-item sph-clickable' });
                 const sphereOn = isView && vs.meshType === 'sphere';
                 sphereEl.classList.toggle('sph-item-active', sphereOn);
                 sphereEl.textContent = (sphereOn ? '▶ ' : '  ') + s.sphere.split('/').pop();
@@ -265,22 +266,22 @@ window.app = (() => {
             }
 
             if (s.sulc || s.curv) {
-                viewSec.appendChild(_el('div', { className: 'sph-divider' }));
+                viewSec.appendChild(el('div', { className: 'sph-divider' }));
                 if (s.sulc) {
-                    const el = _el('div', { className: 'sph-item sph-clickable' });
+                    const sulcEl = el('div', { className: 'sph-item sph-clickable' });
                     const on = vs.texType === 'sulc';
-                    el.classList.toggle('sph-tex-active', on);
-                    el.textContent = (on ? '☑ ' : '☐ ') + 'sulcal depth';
-                    el.onclick = () => _toggleTexture(id, 'sulc');
-                    viewSec.appendChild(el);
+                    sulcEl.classList.toggle('sph-tex-active', on);
+                    sulcEl.textContent = (on ? '☑ ' : '☐ ') + 'sulcal depth';
+                    sulcEl.onclick = () => _toggleTexture(id, 'sulc');
+                    viewSec.appendChild(sulcEl);
                 }
                 if (s.curv) {
-                    const el = _el('div', { className: 'sph-item sph-clickable' });
+                    const curvEl = el('div', { className: 'sph-item sph-clickable' });
                     const on = vs.texType === 'curv';
-                    el.classList.toggle('sph-tex-active', on);
-                    el.textContent = (on ? '☑ ' : '☐ ') + 'curvature';
-                    el.onclick = () => _toggleTexture(id, 'curv');
-                    viewSec.appendChild(el);
+                    curvEl.classList.toggle('sph-tex-active', on);
+                    curvEl.textContent = (on ? '☑ ' : '☐ ') + 'curvature';
+                    curvEl.onclick = () => _toggleTexture(id, 'curv');
+                    viewSec.appendChild(curvEl);
                 }
             }
 
@@ -288,27 +289,27 @@ window.app = (() => {
         }
 
         // Quick-load pills
-        const ql = _el('div', { className: 'quickload-label' });
+        const ql = el('div', { className: 'quickload-label' });
         ql.textContent = 'Quick load:';
         container.appendChild(ql);
 
-        const pills = _el('div', { className: 'quickload-pills' });
+        const pills = el('div', { className: 'quickload-pills' });
         DATASETS.forEach(ds => {
-            const btn = _el('button', { className: 'pill-btn' });
+            const btn = el('button', { className: 'pill-btn' });
             btn.textContent = ds.label;
             btn.onclick = () => _loadSubject(dataRoot + '/' + ds.rel);
             pills.appendChild(btn);
         });
         container.appendChild(pills);
 
-        const sep = _el('div', { className: 'sep-label' });
+        const sep = el('div', { className: 'sep-label' });
         sep.textContent = '— or browse —';
         container.appendChild(sep);
 
-        const fbContainer = _el('div', { className: 'fb-container' });
+        const fbContainer = el('div', { className: 'fb-container' });
         container.appendChild(fbContainer);
 
-        const addBtn = _el('button', { className: 'load-btn' });
+        const addBtn = el('button', { className: 'load-btn' });
         addBtn.textContent = '+ Add mesh';
         addBtn.disabled = true;
 
@@ -330,10 +331,10 @@ window.app = (() => {
         const existing = rowEl.querySelector('.remove-confirm');
         if (existing) { existing.remove(); return; }
 
-        const confirmEl = _el('div', { className: 'remove-confirm' });
+        const confirmEl = el('div', { className: 'remove-confirm' });
         confirmEl.textContent = `Remove ${id} and all derived files? `;
 
-        const yesBtn = _el('button', { className: 'remove-confirm-yes' });
+        const yesBtn = el('button', { className: 'remove-confirm-yes' });
         yesBtn.textContent = 'Remove';
         yesBtn.onclick = async e => {
             e.stopPropagation();
@@ -353,11 +354,11 @@ window.app = (() => {
 
             const c = document.getElementById('rpanel-content');
             if (c) renderStep(currentStep);
-            _setStatus(`Removed ${id}`);
+            setStatus(`Removed ${id}`);
         };
         confirmEl.appendChild(yesBtn);
 
-        const noBtn = _el('button', { className: 'remove-confirm-no' });
+        const noBtn = el('button', { className: 'remove-confirm-no' });
         noBtn.textContent = 'Cancel';
         noBtn.onclick = e => { e.stopPropagation(); confirmEl.remove(); };
         confirmEl.appendChild(noBtn);
@@ -368,7 +369,7 @@ window.app = (() => {
     async function _loadSubject(absPath) {
         if (!absPath) return;
         const name = absPath.split('/').pop();
-        _setStatus(`Loading ${name}…`);
+        setStatus(`Loading ${name}…`);
         try {
             // Detect project from path: .../data/raw/meshes/<id>/mesh.ply
             let id = null;
@@ -416,7 +417,7 @@ window.app = (() => {
             if (comp.curv)         found.push('curvature');
             if (comp.sulci_json)   found.push('landmarks');
             if (comp.rotation_txt) found.push('rotation');
-            _setStatus(`${name} loaded${found.length ? ' — ' + found.join(', ') + ' available' : ''}`);
+            setStatus(`${name} loaded${found.length ? ' — ' + found.join(', ') + ' available' : ''}`);
 
             if (currentStep === 1) {
                 const c = document.getElementById('rpanel-content');
@@ -425,24 +426,24 @@ window.app = (() => {
                 renderStep(currentStep);
             }
         } catch (e) {
-            _setStatus(`Load error: ${e.message}`);
+            setStatus(`Load error: ${e.message}`);
         }
     }
 
     async function _loadProjectFile(projectJsonPath) {
         const root = projectJsonPath.replace(/\/project\.json$/, '');
-        _setStatus('Loading project…');
+        setStatus('Loading project…');
         try {
             const proj = await getProject(root);
             projectRoot = root;
             const ids = proj.subjects || [];
-            if (ids.length === 0) { _setStatus('Project has no subjects'); return; }
+            if (ids.length === 0) { setStatus('Project has no subjects'); return; }
             for (const subjectId of ids) {
                 await _loadSubject(`${root}/data/raw/meshes/${subjectId}/mesh.ply`);
             }
-            _setStatus(`Project loaded — ${ids.length} subject${ids.length > 1 ? 's' : ''}`);
+            setStatus(`Project loaded — ${ids.length} subject${ids.length > 1 ? 's' : ''}`);
         } catch (e) {
-            _setStatus(`Project load error: ${e.message}`);
+            setStatus(`Project load error: ${e.message}`);
         }
     }
 
@@ -469,13 +470,13 @@ window.app = (() => {
                     meshPath: path,
                     onConfirm: async ({ projectRoot: root, subjectId }) => {
                         try {
-                            _setStatus('Creating project…');
+                            setStatus('Creating project…');
                             await createProject({ root_dir: root, ref_id: subjectId, ref_source_path: path });
                             projectRoot = root;
                             await _loadSubject(`${root}/data/raw/meshes/${subjectId}/mesh.ply`);
-                            _setStatus('Project created');
+                            setStatus('Project created');
                         } catch (e) {
-                            _setStatus(`Project creation failed: ${e.message}`);
+                            setStatus(`Project creation failed: ${e.message}`);
                         }
                         resolve();
                     },
@@ -491,11 +492,11 @@ window.app = (() => {
                     projectRoot,
                     onConfirm: async ({ subjectId }) => {
                         try {
-                            _setStatus(`Adding ${subjectId} to project…`);
+                            setStatus(`Adding ${subjectId} to project…`);
                             await addSubject({ project_root: projectRoot, subject_id: subjectId, source_path: path });
                             await _loadSubject(`${projectRoot}/data/raw/meshes/${subjectId}/mesh.ply`);
                         } catch (e) {
-                            _setStatus(`Failed to add subject: ${e.message}`);
+                            setStatus(`Failed to add subject: ${e.message}`);
                         }
                         resolve();
                     },
@@ -532,27 +533,27 @@ window.app = (() => {
         container.innerHTML = '';
 
         if (subjectOrder.length === 0) {
-            const msg = _el('p', { className: 'coming-soon' });
+            const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'No meshes loaded — go to Load (step 1) first.';
             container.appendChild(msg);
             return;
         }
 
         // Subject roster with inline status chips
-        const roster = _el('div', { className: 'subject-roster' });
+        const roster = el('div', { className: 'subject-roster' });
         subjectOrder.forEach(id => {
             const s   = subjects[id];
-            const row = _el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
+            const row = el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
             row.dataset.subjectId = id;
 
-            const info = _el('div', { className: 'subject-row-info' });
-            const idEl = _el('span', { className: 'subject-row-id' });
+            const info = el('div', { className: 'subject-row-info' });
+            const idEl = el('span', { className: 'subject-row-id' });
             idEl.textContent = id;
             info.appendChild(idEl);
 
-            const chips = _el('span', { className: 'pre-chips' });
+            const chips = el('span', { className: 'pre-chips' });
             const _chip = (label, done) => {
-                const c = _el('span', { className: `pre-chip ${done ? 'pre-done' : 'pre-missing'}` });
+                const c = el('span', { className: `pre-chip ${done ? 'pre-done' : 'pre-missing'}` });
                 c.textContent = (done ? '✓' : '✗') + ' ' + label;
                 return c;
             };
@@ -568,7 +569,7 @@ window.app = (() => {
             roster.appendChild(row);
         });
         container.appendChild(roster);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         // Detail section for active subject
         if (!activeSubjectId || !subjects[activeSubjectId]) return;
@@ -576,49 +577,43 @@ window.app = (() => {
         const id  = activeSubjectId;
         const s   = subjects[id];
 
-        const section = _el('div', { className: 'sph-section' });
+        const section = el('div', { className: 'sph-section' });
 
-        const hdr = _el('div', { className: 'pre-header' });
-        const lbl = _el('span', { className: 'sph-label' });
+        const hdr = el('div', { className: 'pre-header' });
+        const lbl = el('span', { className: 'sph-label' });
         lbl.textContent = id;
         hdr.appendChild(lbl);
-        const fname = _el('span', { className: 'pre-filename' });
+        const fname = el('span', { className: 'pre-filename' });
         fname.textContent = s.path ? '  ' + s.path.split('/').pop() : '';
         hdr.appendChild(fname);
         section.appendChild(hdr);
 
-        section.appendChild(_preItem('Sphere',       !!s.sphere));
-        section.appendChild(_preItem('Curvature',    !!s.curv));
-        section.appendChild(_preItem('Sulcal depth', !!s.sulc));
+        section.appendChild(preItem('Sphere',       !!s.sphere));
+        section.appendChild(preItem('Curvature',    !!s.curv));
+        section.appendChild(preItem('Sulcal depth', !!s.sulc));
 
         if (!s.sphere) {
-            const bar  = _el('div', { className: 'progress-bar-wrap' });
-            const fill = _el('div', { className: 'progress-bar' });
+            const bar  = el('div', { className: 'progress-bar-wrap' });
+            const fill = el('div', { className: 'progress-bar' });
             bar.appendChild(fill); bar.style.display = 'none';
             section.appendChild(bar);
-            const btn = _el('button', { className: 'load-btn' });
+            const btn = el('button', { className: 'load-btn' });
             btn.textContent = 'Spherize';
             btn.onclick = () => _spherize(id, fill, btn);
             section.appendChild(btn);
         }
         if (!s.curv || !s.sulc) {
-            const bar  = _el('div', { className: 'progress-bar-wrap' });
-            const fill = _el('div', { className: 'progress-bar' });
+            const bar  = el('div', { className: 'progress-bar-wrap' });
+            const fill = el('div', { className: 'progress-bar' });
             bar.appendChild(fill); bar.style.display = 'none';
             section.appendChild(bar);
-            const btn = _el('button', { className: 'load-btn' });
+            const btn = el('button', { className: 'load-btn' });
             btn.textContent = 'Compute maps';
             btn.onclick = () => _computeCurvature(id, fill, btn);
             section.appendChild(btn);
         }
 
         container.appendChild(section);
-    }
-
-    function _preItem(label, done) {
-        const el = _el('div', { className: `pre-check ${done ? 'pre-done' : 'pre-missing'}` });
-        el.textContent = (done ? '✓ ' : '✗ ') + label;
-        return el;
     }
 
     async function _viewMesh(id, meshType) {
@@ -653,13 +648,13 @@ window.app = (() => {
                 try {
                     const scalars = await apiGet('/api/scalar', { path: scalarPath });
                     await viewer.loadMeshColored(meshUrl(meshPath), scalars, { preserveOrientation });
-                    _setStatus(`${meshPath.split('/').pop()} — ${texType === 'sulc' ? 'sulcal depth' : 'curvature'}`);
-                } catch (e) { _setStatus(`Error: ${e.message}`); }
+                    setStatus(`${meshPath.split('/').pop()} — ${texType === 'sulc' ? 'sulcal depth' : 'curvature'}`);
+                } catch (e) { setStatus(`Error: ${e.message}`); }
                 return;
             }
         }
         await viewer.loadMesh(meshUrl(meshPath), { preserveOrientation });
-        _setStatus(meshPath.split('/').pop());
+        setStatus(meshPath.split('/').pop());
     }
 
     async function _spherize(id, fillEl, btn) {
@@ -668,17 +663,17 @@ window.app = (() => {
         const body = { path: s.path };
         if (projectRoot) body.out_dir = _annotationsDir(id);
         fillEl.parentElement.style.display = 'block';
-        _setStatus(`Spherizing ${s.path.split('/').pop()}…`);
+        setStatus(`Spherizing ${s.path.split('/').pop()}…`);
         try {
             const { job_id } = await apiPost('/api/spherize', body);
             const result = await pollJob(job_id, {
                 onProgress: p => { fillEl.style.width = `${Math.round(p * 100)}%`; },
             });
             subjects[id].sphere = result.sphere_path;
-            _setStatus(`Sphere ready: ${result.sphere_path.split('/').pop()}`);
+            setStatus(`Sphere ready: ${result.sphere_path.split('/').pop()}`);
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Spherize error: ${e.message}`);
+            setStatus(`Spherize error: ${e.message}`);
             btn.disabled = false;
         }
     }
@@ -689,7 +684,7 @@ window.app = (() => {
         const body = { path: s.path };
         if (projectRoot) body.out_dir = _annotationsDir(id);
         fillEl.parentElement.style.display = 'block';
-        _setStatus(`Computing maps for ${s.path.split('/').pop()}…`);
+        setStatus(`Computing maps for ${s.path.split('/').pop()}…`);
         try {
             const { job_id } = await apiPost('/api/curvature', body);
             const result = await pollJob(job_id, {
@@ -697,10 +692,10 @@ window.app = (() => {
             });
             subjects[id].curv = result.curv_path;
             subjects[id].sulc = result.sulc_path;
-            _setStatus(`Maps ready: ${result.sulc_path.split('/').pop()}`);
+            setStatus(`Maps ready: ${result.sulc_path.split('/').pop()}`);
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Maps error: ${e.message}`);
+            setStatus(`Maps error: ${e.message}`);
             btn.disabled = false;
         }
     }
@@ -729,7 +724,7 @@ window.app = (() => {
 
         const s = subjects[id];
         if (!s?.sphere) {
-            _setStatus(`No sphere for ${id} — run Preprocess first`);
+            setStatus(`No sphere for ${id} — run Preprocess first`);
             renderStep(currentStep);
             return;
         }
@@ -750,7 +745,7 @@ window.app = (() => {
         }
         if (currentStep !== 3) return;
 
-        _setStatus('Loading sphere…');
+        setStatus('Loading sphere…');
         try {
             const scalars = s.sulc ? await apiGet('/api/scalar', { path: s.sulc }) : null;
             if (currentStep !== 3) return;
@@ -786,18 +781,18 @@ window.app = (() => {
             const sulciPath = s.sulci;
             if (inMem) {
                 alignOverlay.fromJSON(inMem);
-                _setStatus(`Stereo view ready — ${alignOverlay.regions.length} landmarks restored`);
+                setStatus(`Stereo view ready — ${alignOverlay.regions.length} landmarks restored`);
             } else if (sulciPath) {
                 try {
                     const data = await apiGet('/api/file', { path: sulciPath });
                     alignOverlay.fromJSON(data);
-                    _setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
+                    setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
                 } catch { /* no prior sulci.json */ }
             }
 
-            if (!inMem && !sulciPath) _setStatus('Stereo view ready — draw landmarks');
+            if (!inMem && !sulciPath) setStatus('Stereo view ready — draw landmarks');
         } catch (e) {
-            _setStatus(`Align error: ${e.message}`);
+            setStatus(`Align error: ${e.message}`);
             return;
         }
 
@@ -817,7 +812,7 @@ window.app = (() => {
             const s      = alignSubjectId ? subjects[alignSubjectId] : null;
             const native = s?.path;
             const scalar = s?.sulc || s?.curv;
-            _setStatus('Loading 3D view…');
+            setStatus('Loading 3D view…');
             try {
                 const scalars = scalar
                     ? await apiGet('/api/scalar', { path: scalar }).catch(() => null)
@@ -843,16 +838,16 @@ window.app = (() => {
                         );
                     }
                 }
-                _setStatus('3D view — orbit to verify; switch back to Flat to draw landmarks');
+                setStatus('3D view — orbit to verify; switch back to Flat to draw landmarks');
             } catch (e) {
-                _setStatus(`3D view error: ${e.message}`);
+                setStatus(`3D view error: ${e.message}`);
             }
         } else {
             viewer.clearAll();
             alignStereoView._canvas.style.display = '';
             alignOverlay._canvas.style.display    = '';
             alignStereoView._render();
-            _setStatus('Flat stereo view');
+            setStatus('Flat stereo view');
         }
     }
 
@@ -870,26 +865,26 @@ window.app = (() => {
         container.innerHTML = '';
 
         if (subjectOrder.length === 0) {
-            const msg = _el('p', { className: 'coming-soon' });
+            const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'No meshes loaded — go to Load (step 1) first.';
             container.appendChild(msg);
             return;
         }
 
         // Subject selector roster
-        const roster = _el('div', { className: 'subject-roster' });
+        const roster = el('div', { className: 'subject-roster' });
         subjectOrder.forEach(id => {
             const s   = subjects[id];
-            const row = _el('div', { className: `subject-row${id === alignSubjectId ? ' active' : ''}` });
+            const row = el('div', { className: `subject-row${id === alignSubjectId ? ' active' : ''}` });
             row.dataset.subjectId = id;
 
-            const info = _el('div', { className: 'subject-row-info' });
-            const idEl = _el('span', { className: 'subject-row-id' });
+            const info = el('div', { className: 'subject-row-info' });
+            const idEl = el('span', { className: 'subject-row-id' });
             idEl.textContent = id;
             info.appendChild(idEl);
 
             if (s.sulci || alignInMemory[id]?.length > 0) {
-                const badge = _el('span', { className: 'sulci-badge' });
+                const badge = el('span', { className: 'sulci-badge' });
                 badge.textContent = '✓ landmarks';
                 info.appendChild(badge);
             }
@@ -899,10 +894,10 @@ window.app = (() => {
             roster.appendChild(row);
         });
         container.appendChild(roster);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         if (!alignSubjectId) {
-            const msg = _el('p', { className: 'coming-soon' });
+            const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'Select a mesh above to start alignment.';
             container.appendChild(msg);
             // Auto-select first subject that has a sphere
@@ -913,7 +908,7 @@ window.app = (() => {
 
         const sphere = subjects[alignSubjectId]?.sphere;
         if (!sphere) {
-            const msg = _el('p', { className: 'coming-soon' });
+            const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'Preprocess this mesh first (step 2).';
             container.appendChild(msg);
             return;
@@ -926,11 +921,11 @@ window.app = (() => {
             { id: 'addpoint', label: '+Pt',    title: 'Add point to curve' },
             { id: 'delpoint', label: '-Pt',    title: 'Delete point from curve' },
         ];
-        const toolBar = _el('div', { className: 'align-tools' });
+        const toolBar = el('div', { className: 'align-tools' });
         const currentTool  = alignOverlay?.tool ?? 'draw';
         const editDisabled = alignViewMode === '3d';
         TOOLS.forEach(({ id, label, title }) => {
-            const btn = _el('button', { className: `tool-btn${currentTool === id ? ' active' : ''}` });
+            const btn = el('button', { className: `tool-btn${currentTool === id ? ' active' : ''}` });
             btn.textContent = label;
             btn.title       = editDisabled ? 'Not available in 3D mode' : title;
             btn.disabled    = editDisabled;
@@ -942,7 +937,7 @@ window.app = (() => {
             };
             toolBar.appendChild(btn);
         });
-        const rotBtn = _el('button', {
+        const rotBtn = el('button', {
             className: `tool-btn rotate${currentTool === 'rotate' ? ' active' : ''}`,
         });
         rotBtn.textContent = '↻';
@@ -959,15 +954,15 @@ window.app = (() => {
         container.appendChild(toolBar);
 
         // View mode row
-        const viewRow = _el('div', { className: 'view-row' });
+        const viewRow = el('div', { className: 'view-row' });
         viewRow.setAttribute('role', 'group');
         viewRow.setAttribute('aria-label', 'View controls');
 
-        const viewLabel = _el('span', { className: 'view-row-label' });
+        const viewLabel = el('span', { className: 'view-row-label' });
         viewLabel.textContent = 'VIEW';
         viewRow.appendChild(viewLabel);
 
-        const flatBtn = _el('button', { className: `view-btn${alignViewMode === 'flat' ? ' active' : ''}` });
+        const flatBtn = el('button', { className: `view-btn${alignViewMode === 'flat' ? ' active' : ''}` });
         flatBtn.textContent = 'Flat';
         flatBtn.title = 'Flat disc — stereographic projection';
         flatBtn.setAttribute('aria-pressed', String(alignViewMode === 'flat'));
@@ -976,7 +971,7 @@ window.app = (() => {
         flatBtn.onclick = () => _switchViewMode('flat');
         viewRow.appendChild(flatBtn);
 
-        const btn3d = _el('button', { className: `view-btn${alignViewMode === '3d' ? ' active' : ''}` });
+        const btn3d = el('button', { className: `view-btn${alignViewMode === '3d' ? ' active' : ''}` });
         btn3d.textContent = '3D';
         btn3d.title = '3D sphere — orbit to verify landmark placement';
         btn3d.setAttribute('aria-pressed', String(alignViewMode === '3d'));
@@ -985,10 +980,10 @@ window.app = (() => {
         btn3d.onclick = () => _switchViewMode('3d');
         viewRow.appendChild(btn3d);
 
-        const viewSep = _el('span', { className: 'view-row-sep' });
+        const viewSep = el('span', { className: 'view-row-sep' });
         viewRow.appendChild(viewSep);
 
-        const wireBtn = _el('button', { className: `view-btn${alignWireframe ? ' active' : ''}` });
+        const wireBtn = el('button', { className: `view-btn${alignWireframe ? ' active' : ''}` });
         wireBtn.textContent = '⊡ Wire';
         wireBtn.title = 'Toggle wireframe';
         wireBtn.setAttribute('aria-pressed', String(alignWireframe));
@@ -1003,8 +998,8 @@ window.app = (() => {
         if (alignViewMode === 'flat' && alignStereoView) {
             const { alpha, beta, gamma } = alignStereoView.getEulerZYX();
 
-            const rotSection = _el('div', { className: 'rot-section' });
-            const rotLabel = _el('div', { className: 'rot-label' });
+            const rotSection = el('div', { className: 'rot-section' });
+            const rotLabel = el('div', { className: 'rot-label' });
             rotLabel.textContent = 'Rotation';
             rotSection.appendChild(rotLabel);
 
@@ -1018,13 +1013,13 @@ window.app = (() => {
             ];
 
             AXES.forEach(({ id, label, min, max, val, title }) => {
-                const row = _el('div', { className: 'rot-row' });
+                const row = el('div', { className: 'rot-row' });
 
-                const lbl = _el('label', { className: 'rot-row-label', htmlFor: `rot-${id}`, title });
+                const lbl = el('label', { className: 'rot-row-label', htmlFor: `rot-${id}`, title });
                 lbl.textContent = label;
                 row.appendChild(lbl);
 
-                const slider = _el('input');
+                const slider = el('input');
                 slider.type  = 'range';
                 slider.id    = `rot-${id}`;
                 slider.min   = min;
@@ -1036,7 +1031,7 @@ window.app = (() => {
                 slider.setAttribute('aria-valuemax', max);
                 slider.setAttribute('aria-valuenow', val);
 
-                const valSpan = _el('span', { className: 'rot-row-val' });
+                const valSpan = el('span', { className: 'rot-row-val' });
                 valSpan.setAttribute('aria-live', 'polite');
                 valSpan.textContent = `${val}°`;
 
@@ -1059,7 +1054,7 @@ window.app = (() => {
         }
 
         // Add landmark button
-        const addBtn = _el('button', { className: 'load-btn' });
+        const addBtn = el('button', { className: 'load-btn' });
         addBtn.textContent = '+ New landmark';
         addBtn.style.marginTop = '0';
         addBtn.disabled = editDisabled || !alignOverlay;
@@ -1072,10 +1067,10 @@ window.app = (() => {
         container.appendChild(addBtn);
 
         // Landmark list
-        const listEl = _el('div', { className: 'landmark-list' });
+        const listEl = el('div', { className: 'landmark-list' });
         const regions = alignOverlay?.regions ?? [];
         regions.forEach(reg => {
-            const item = _el('div', {
+            const item = el('div', {
                 className: `landmark-item${alignOverlay?.region === reg ? ' selected' : ''}`,
             });
             item.onclick = () => {
@@ -1084,16 +1079,16 @@ window.app = (() => {
                 renderStep(currentStep);
             };
 
-            const dot = _el('div', { className: 'landmark-dot' });
+            const dot = el('div', { className: 'landmark-dot' });
             dot.style.background = reg.path.strokeColor?.toCSS?.() ?? '#ff6b6b';
             item.appendChild(dot);
 
-            const nameInput = _el('input', { className: 'landmark-name', value: reg.name });
+            const nameInput = el('input', { className: 'landmark-name', value: reg.name });
             nameInput.onclick = e => e.stopPropagation();
             nameInput.onchange = () => alignOverlay?.renameRegion(reg, nameInput.value);
             item.appendChild(nameInput);
 
-            const delBtn = _el('button', { className: 'landmark-del' });
+            const delBtn = el('button', { className: 'landmark-del' });
             delBtn.textContent = '×';
             delBtn.title = 'Delete landmark';
             delBtn.onclick = e => {
@@ -1105,27 +1100,27 @@ window.app = (() => {
             listEl.appendChild(item);
         });
         if (regions.length === 0) {
-            const empty = _el('div', { className: 'coming-soon' });
+            const empty = el('div', { className: 'coming-soon' });
             empty.textContent = 'No landmarks yet — click "Draw" and trace a sulcus.';
             listEl.appendChild(empty);
         }
         container.appendChild(listEl);
 
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
-        const loadSulciBtn = _el('button', { className: 'load-btn' });
+        const loadSulciBtn = el('button', { className: 'load-btn' });
         loadSulciBtn.style.marginTop = '0';
         loadSulciBtn.textContent = 'Load sulci.json';
         loadSulciBtn.onclick = () => _loadSulciJSON();
         container.appendChild(loadSulciBtn);
 
-        const saveSulciBtn = _el('button', { className: 'load-btn' });
+        const saveSulciBtn = el('button', { className: 'load-btn' });
         saveSulciBtn.style.background = 'var(--accent2)';
         saveSulciBtn.textContent = 'Save sulci.json';
         saveSulciBtn.onclick = () => _saveSulciJSON();
         container.appendChild(saveSulciBtn);
 
-        const saveRotBtn = _el('button', { className: 'load-btn' });
+        const saveRotBtn = el('button', { className: 'load-btn' });
         saveRotBtn.style.background = '#555';
         saveRotBtn.textContent = 'Save rotation.txt';
         saveRotBtn.onclick = () => _saveRotationTxt();
@@ -1140,16 +1135,16 @@ window.app = (() => {
         if (!alignOverlay) return;
         const sulciPath = subjects[alignSubjectId]?.sulci;
         if (!sulciPath) {
-            _setStatus('No sulci.json found for this subject');
+            setStatus('No sulci.json found for this subject');
             return;
         }
         try {
             const data = await apiGet('/api/file', { path: sulciPath });
             alignOverlay.fromJSON(data);
-            _setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
+            setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Load sulci error: ${e.message}`);
+            setStatus(`Load sulci error: ${e.message}`);
         }
     }
 
@@ -1163,9 +1158,9 @@ window.app = (() => {
             const json = alignOverlay.toJSON();
             await apiPut('/api/file', { path: savePath, content: JSON.stringify(json, null, 2) });
             subjects[alignSubjectId].sulci = savePath;
-            _setStatus(`Saved ${savePath.split('/').pop()}`);
+            setStatus(`Saved ${savePath.split('/').pop()}`);
         } catch (e) {
-            _setStatus(`Save sulci error: ${e.message}`);
+            setStatus(`Save sulci error: ${e.message}`);
         }
     }
 
@@ -1179,9 +1174,9 @@ window.app = (() => {
             const txt = alignOverlay.getCameraRotationText();
             await apiPut('/api/file', { path: savePath, content: txt });
             subjects[alignSubjectId].rot = savePath;
-            _setStatus(`Saved ${savePath.split('/').pop()}`);
+            setStatus(`Saved ${savePath.split('/').pop()}`);
         } catch (e) {
-            _setStatus(`Save rotation error: ${e.message}`);
+            setStatus(`Save rotation error: ${e.message}`);
         }
     }
 
@@ -1210,32 +1205,32 @@ window.app = (() => {
 
         // ── Existing matches roster ──────────────────────────────────────────
         if (existingMatches.length > 0) {
-            const rosterSection = _el('div', { className: 'sph-section' });
-            const rosterHdr = _el('div', { className: 'sph-label' });
+            const rosterSection = el('div', { className: 'sph-section' });
+            const rosterHdr = el('div', { className: 'sph-label' });
             rosterHdr.textContent = 'Existing matches';
             rosterSection.appendChild(rosterHdr);
 
             existingMatches.forEach(m => {
-                const row = _el('div', { className: 'match-roster-row' });
+                const row = el('div', { className: 'match-roster-row' });
                 row.setAttribute('aria-label', `Match ${m.mov_id} → ${m.ref_id}`);
 
-                const nameEl = _el('span', { className: 'match-roster-name' });
+                const nameEl = el('span', { className: 'match-roster-name' });
                 nameEl.textContent = `${m.mov_id} → ${m.ref_id}`;
                 row.appendChild(nameEl);
 
-                const statusEl = _el('span', { className: 'match-roster-status' });
+                const statusEl = el('span', { className: 'match-roster-status' });
                 statusEl.textContent = `${m.has_morph ? '◉' : '○'} morph  ${m.has_match ? '◉' : '○'} match`;
                 statusEl.title = `morph.sphere.ply: ${m.has_morph ? 'present' : 'missing'} · surf.0.ply: ${m.has_match ? 'present' : 'missing'}`;
                 row.appendChild(statusEl);
 
-                const loadBtn = _el('button', { className: 'roster-load-btn' });
+                const loadBtn = el('button', { className: 'roster-load-btn' });
                 loadBtn.textContent = 'Load';
                 loadBtn.disabled = !m.has_match;
                 loadBtn.setAttribute('aria-label', `Load match ${m.name}`);
                 loadBtn.onclick = () => _loadMatchFromDisk(m);
                 row.appendChild(loadBtn);
 
-                const delBtn = _el('button', { className: 'roster-del-btn' });
+                const delBtn = el('button', { className: 'roster-del-btn' });
                 delBtn.textContent = '✕';
                 delBtn.setAttribute('aria-label', `Delete match ${m.name}`);
                 delBtn.onclick = () => _confirmDeleteMatch(m, row, rosterSection);
@@ -1245,29 +1240,29 @@ window.app = (() => {
             });
 
             container.appendChild(rosterSection);
-            container.appendChild(_el('div', { className: 'sph-divider' }));
+            container.appendChild(el('div', { className: 'sph-divider' }));
         }
 
         // ── Ref / Mov pickers ────────────────────────────────────────────────
-        const pickerSection = _el('div', { className: 'sph-section' });
-        const pickerHdr = _el('div', { className: 'sph-label' });
+        const pickerSection = el('div', { className: 'sph-section' });
+        const pickerHdr = el('div', { className: 'sph-label' });
         pickerHdr.textContent = 'New match';
         pickerSection.appendChild(pickerHdr);
 
         const _makePickerRow = (label, currentId, selId, onSet) => {
-            const row = _el('div', { className: 'param-row' });
-            const lbl = _el('span', { className: 'param-label' });
+            const row = el('div', { className: 'param-row' });
+            const lbl = el('span', { className: 'param-label' });
             lbl.textContent = label;
             row.appendChild(lbl);
-            const sel = _el('select');
+            const sel = el('select');
             sel.id = selId;
             sel.className = 'match-subject-select';
             sel.setAttribute('aria-label', `${label} subject`);
-            const emptyOpt = _el('option');
+            const emptyOpt = el('option');
             emptyOpt.value = ''; emptyOpt.textContent = '— select —';
             sel.appendChild(emptyOpt);
             subjectOrder.forEach(id => {
-                const opt = _el('option');
+                const opt = el('option');
                 opt.value = id; opt.textContent = id;
                 if (id === currentId) opt.selected = true;
                 sel.appendChild(opt);
@@ -1285,62 +1280,62 @@ window.app = (() => {
         pickerSection.appendChild(_makePickerRow('Ref', matchRefId, 'match-ref-select', v => { matchRefId = v; }));
         pickerSection.appendChild(_makePickerRow('Mov', matchMovId, 'match-mov-select', v => { matchMovId = v; }));
         container.appendChild(pickerSection);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         // ── Inputs checklist ─────────────────────────────────────────────────
-        const inputsSection = _el('div', { className: 'sph-section' });
-        const inputsHdr = _el('div', { className: 'sph-label' });
+        const inputsSection = el('div', { className: 'sph-section' });
+        const inputsHdr = el('div', { className: 'sph-label' });
         inputsHdr.textContent = 'Inputs';
         inputsSection.appendChild(inputsHdr);
 
-        inputsSection.appendChild(_preItem(matchRefId ? `Ref: ${matchRefId}` : 'Ref: not selected', !!ref?.path));
-        inputsSection.appendChild(_preItem(matchMovId ? `Mov: ${matchMovId}` : 'Mov: not selected', !!mov?.path));
+        inputsSection.appendChild(preItem(matchRefId ? `Ref: ${matchRefId}` : 'Ref: not selected', !!ref?.path));
+        inputsSection.appendChild(preItem(matchMovId ? `Mov: ${matchMovId}` : 'Mov: not selected', !!mov?.path));
 
         const bothSpheres = !!(ref?.sphere && mov?.sphere);
         const sphereLabel = !ref?.sphere && !mov?.sphere ? 'Spheres: neither computed'
                           : !ref?.sphere                  ? 'Spheres: ref missing'
                           : !mov?.sphere                  ? 'Spheres: mov missing'
                           : 'Spheres computed';
-        inputsSection.appendChild(_preItem(sphereLabel, bothSpheres));
+        inputsSection.appendChild(preItem(sphereLabel, bothSpheres));
 
         const hasRefSulci = !!(alignInMemory[matchRefId]?.length || ref?.sulci);
         const hasMovSulci = !!(alignInMemory[matchMovId]?.length || mov?.sulci);
         const lmkLabel = `Landmarks: ref ${hasRefSulci ? '✓' : '✗'} · mov ${hasMovSulci ? '✓' : '✗'}`;
-        inputsSection.appendChild(_preItem(lmkLabel, hasRefSulci && hasMovSulci));
+        inputsSection.appendChild(preItem(lmkLabel, hasRefSulci && hasMovSulci));
 
         if (ref?.rot || mov?.rot) {
             const bothRot  = !!(ref?.rot && mov?.rot);
             const rotLabel = !ref?.rot ? 'Rotations: ref missing'
                            : !mov?.rot ? 'Rotations: mov missing'
                            : 'Rotations';
-            inputsSection.appendChild(_preItem(rotLabel, bothRot));
+            inputsSection.appendChild(preItem(rotLabel, bothRot));
         }
 
         container.appendChild(inputsSection);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         // ── Output directory ─────────────────────────────────────────────────
-        const outSection = _el('div', { className: 'sph-section' });
-        const outHdr = _el('div', { className: 'sph-label' });
+        const outSection = el('div', { className: 'sph-section' });
+        const outHdr = el('div', { className: 'sph-label' });
         outHdr.textContent = 'Output directory';
         outSection.appendChild(outHdr);
 
-        const outInput = _el('input', { className: 'out-dir-input' });
+        const outInput = el('input', { className: 'out-dir-input' });
         outInput.type = 'text';
         outInput.value = matchOutDir || '';
         outInput.setAttribute('aria-label', 'Match output directory');
         outInput.onchange = () => { matchOutDir = outInput.value.trim() || null; };
         outSection.appendChild(outInput);
         container.appendChild(outSection);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         // ── Viewer mode ──────────────────────────────────────────────────────
-        const viewSection = _el('div', { className: 'sph-section' });
-        const viewSHdr = _el('div', { className: 'sph-label' });
+        const viewSection = el('div', { className: 'sph-section' });
+        const viewSHdr = el('div', { className: 'sph-label' });
         viewSHdr.textContent = 'Viewer';
         viewSection.appendChild(viewSHdr);
 
-        const viewModeRow = _el('div', { className: 'view-row' });
+        const viewModeRow = el('div', { className: 'view-row' });
         viewModeRow.setAttribute('role', 'group');
         viewModeRow.setAttribute('aria-label', 'Match viewer mode');
         const VIEW_MODES = [
@@ -1348,7 +1343,7 @@ window.app = (() => {
             { id: 'match', label: 'Match', ok: !!matchResult,  title: 'Matched surface' },
         ];
         VIEW_MODES.forEach(({ id, label, ok, title }) => {
-            const b = _el('button', { className: `view-btn${matchViewMode === id ? ' active' : ''}` });
+            const b = el('button', { className: `view-btn${matchViewMode === id ? ' active' : ''}` });
             b.textContent = label; b.title = title; b.disabled = !ok;
             b.setAttribute('aria-pressed', String(matchViewMode === id));
             b.setAttribute('aria-label', title);
@@ -1363,16 +1358,16 @@ window.app = (() => {
         viewSection.appendChild(viewModeRow);
 
         if (morphSurface || matchSurface) {
-            const blendRow = _el('div', { className: 'param-row' });
-            const blendLbl = _el('label', { className: 'param-label', htmlFor: 'morph-blend' });
+            const blendRow = el('div', { className: 'param-row' });
+            const blendLbl = el('label', { className: 'param-label', htmlFor: 'morph-blend' });
             blendLbl.textContent = 'Ref → Mov';
             blendRow.appendChild(blendLbl);
-            const blendSl = _el('input');
+            const blendSl = el('input');
             blendSl.type = 'range'; blendSl.id = 'morph-blend';
             blendSl.min = '0'; blendSl.max = '1'; blendSl.step = '0.01';
             blendSl.value = String(morphInterpT);
             blendSl.setAttribute('aria-label', 'Morph blend: Ref to Mov');
-            const blendVal = _el('input');
+            const blendVal = el('input');
             blendVal.type = 'number'; blendVal.className = 'param-val';
             blendVal.min = '0'; blendVal.max = '100'; blendVal.step = '1';
             blendVal.value = String(Math.round(morphInterpT * 100));
@@ -1393,22 +1388,22 @@ window.app = (() => {
         }
 
         container.appendChild(viewSection);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         // ── Phase 1: Morph ───────────────────────────────────────────────────
-        const morphSection = _el('div', { className: 'sph-section' });
-        const morphHdr = _el('div', { className: 'sph-label' });
+        const morphSection = el('div', { className: 'sph-section' });
+        const morphHdr = el('div', { className: 'sph-label' });
         morphHdr.textContent = 'Phase 1: Morph';
         morphSection.appendChild(morphHdr);
 
-        const morphDesc = _el('p', { className: 'match-desc' });
+        const morphDesc = el('p', { className: 'match-desc' });
         morphDesc.textContent = 'Fast landmark-guided spherical warp (~5 s)';
         morphSection.appendChild(morphDesc);
 
-        const morphBarWrap = _el('div', { className: 'progress-bar-wrap' });
+        const morphBarWrap = el('div', { className: 'progress-bar-wrap' });
         morphBarWrap.id = 'morph-progress';
         morphBarWrap.style.display = morphResult ? 'block' : 'none';
-        const morphBarFill = _el('div', { className: 'progress-bar' });
+        const morphBarFill = el('div', { className: 'progress-bar' });
         morphBarFill.setAttribute('role', 'progressbar');
         morphBarFill.setAttribute('aria-valuenow', morphResult ? '100' : '0');
         morphBarFill.setAttribute('aria-valuemax', '100');
@@ -1417,7 +1412,7 @@ window.app = (() => {
         morphSection.appendChild(morphBarWrap);
 
         const canMorph = !!(ref?.path && mov?.path && ref?.sphere && mov?.sphere && hasRefSulci && hasMovSulci);
-        const morphBtn = _el('button', { className: 'load-btn' });
+        const morphBtn = el('button', { className: 'load-btn' });
         morphBtn.id = 'btn-run-morph';
         morphBtn.textContent = '▶ Run Morph';
         morphBtn.disabled = !canMorph;
@@ -1427,35 +1422,35 @@ window.app = (() => {
         morphSection.appendChild(morphBtn);
 
         if (morphResult) {
-            const done = _el('div', { className: 'pre-check pre-done' });
+            const done = el('div', { className: 'pre-check pre-done' });
             done.textContent = '✓ morph.sphere.ply saved';
             morphSection.appendChild(done);
         }
 
 
         container.appendChild(morphSection);
-        container.appendChild(_el('div', { className: 'sph-divider' }));
+        container.appendChild(el('div', { className: 'sph-divider' }));
 
         // ── Phase 2: Match ───────────────────────────────────────────────────
-        const matchSection = _el('div', { className: 'sph-section' });
-        const matchHdr = _el('div', { className: 'sph-label' });
+        const matchSection = el('div', { className: 'sph-section' });
+        const matchHdr = el('div', { className: 'sph-label' });
         matchHdr.textContent = 'Phase 2: Match';
         matchSection.appendChild(matchHdr);
 
-        const matchDesc = _el('p', { className: 'match-desc' });
+        const matchDesc = el('p', { className: 'match-desc' });
         matchDesc.textContent = 'Laplacian eigenvector optimisation (~1 min)';
         matchSection.appendChild(matchDesc);
 
-        const kRow = _el('div', { className: 'param-row' });
-        const kLabel = _el('label', { className: 'param-label', htmlFor: 'match-k' });
+        const kRow = el('div', { className: 'param-row' });
+        const kLabel = el('label', { className: 'param-label', htmlFor: 'match-k' });
         kLabel.textContent = 'k eigenvectors';
         kRow.appendChild(kLabel);
-        const kSlider = _el('input');
+        const kSlider = el('input');
         kSlider.type = 'range'; kSlider.id = 'match-k';
         kSlider.min = '20'; kSlider.max = '200'; kSlider.step = '5';
         kSlider.value = String(matchK);
         kSlider.setAttribute('aria-label', 'k eigenvectors');
-        const kVal = _el('input');
+        const kVal = el('input');
         kVal.type = 'number'; kVal.className = 'param-val';
         kVal.min = '20'; kVal.max = '200'; kVal.step = '5';
         kVal.value = String(matchK);
@@ -1468,15 +1463,15 @@ window.app = (() => {
         kRow.appendChild(kSlider); kRow.appendChild(kVal);
         matchSection.appendChild(kRow);
 
-        const stepsRow = _el('div', { className: 'param-row' });
-        const stepsLabel = _el('span', { className: 'param-label' });
+        const stepsRow = el('div', { className: 'param-row' });
+        const stepsLabel = el('span', { className: 'param-label' });
         stepsLabel.textContent = 'Refinement steps';
         stepsRow.appendChild(stepsLabel);
-        const stepsGroup = _el('div', { className: 'steps-group' });
+        const stepsGroup = el('div', { className: 'steps-group' });
         stepsGroup.setAttribute('role', 'group');
         stepsGroup.setAttribute('aria-label', 'Refinement steps');
         [1, 2, 3, 4, 5].forEach(n => {
-            const btn = _el('button', { className: `step-seg${matchNsteps === n ? ' active' : ''}` });
+            const btn = el('button', { className: `step-seg${matchNsteps === n ? ' active' : ''}` });
             btn.textContent = String(n);
             btn.setAttribute('aria-pressed', String(matchNsteps === n));
             btn.onclick = () => { matchNsteps = n; renderStep(currentStep); };
@@ -1485,8 +1480,8 @@ window.app = (() => {
         stepsRow.appendChild(stepsGroup);
         matchSection.appendChild(stepsRow);
 
-        const adv = _el('details', { className: 'advanced-details' });
-        const advSum = _el('summary');
+        const adv = el('details', { className: 'advanced-details' });
+        const advSum = el('summary');
         advSum.textContent = 'Advanced';
         adv.appendChild(advSum);
         [
@@ -1494,16 +1489,16 @@ window.app = (() => {
             { id: 'w-deform',  label: 'Deform weight',  min: 0, max: 50, step: 0.5, get: () => matchWDeform,  set: v => { matchWDeform  = v; } },
             { id: 'w-project', label: 'Project weight', min: 0, max: 10, step: 0.1, get: () => matchWProject, set: v => { matchWProject = v; } },
         ].forEach(({ id, label, min, max, step, get, set }) => {
-            const row = _el('div', { className: 'param-row' });
-            const lbl = _el('label', { className: 'param-label', htmlFor: `match-${id}` });
+            const row = el('div', { className: 'param-row' });
+            const lbl = el('label', { className: 'param-label', htmlFor: `match-${id}` });
             lbl.textContent = label;
             row.appendChild(lbl);
-            const sl = _el('input');
+            const sl = el('input');
             sl.type = 'range'; sl.id = `match-${id}`;
             sl.min = String(min); sl.max = String(max); sl.step = String(step);
             sl.value = String(get());
             sl.setAttribute('aria-label', label);
-            const vl = _el('input');
+            const vl = el('input');
             vl.type = 'number'; vl.className = 'param-val';
             vl.min = String(min); vl.max = String(max); vl.step = String(step);
             vl.value = get().toFixed(1);
@@ -1518,15 +1513,15 @@ window.app = (() => {
         });
         matchSection.appendChild(adv);
 
-        const matchBarWrap = _el('div', { className: 'progress-bar-wrap' });
+        const matchBarWrap = el('div', { className: 'progress-bar-wrap' });
         matchBarWrap.id = 'match-progress';
         matchBarWrap.style.display = 'none';
-        const matchBarFill = _el('div', { className: 'progress-bar pulsing' });
+        const matchBarFill = el('div', { className: 'progress-bar pulsing' });
         matchBarFill.setAttribute('role', 'progressbar');
         matchBarWrap.appendChild(matchBarFill);
         matchSection.appendChild(matchBarWrap);
 
-        const matchBtn = _el('button', { className: 'load-btn' });
+        const matchBtn = el('button', { className: 'load-btn' });
         matchBtn.id = 'btn-run-match';
         matchBtn.textContent = '▶ Run Match';
         matchBtn.disabled = !morphResult;
@@ -1536,7 +1531,7 @@ window.app = (() => {
         matchSection.appendChild(matchBtn);
 
         if (matchResult) {
-            const done = _el('div', { className: 'pre-check pre-done' });
+            const done = el('div', { className: 'pre-check pre-done' });
             done.textContent = `✓ ${matchResult.matched_ply.split('/').pop()} saved`;
             matchSection.appendChild(done);
 
@@ -1569,7 +1564,7 @@ window.app = (() => {
         btn.disabled = true;
         fillEl.parentElement.style.display = 'block';
         fillEl.style.width = '5%';
-        _setStatus('Running morph…');
+        setStatus('Running morph…');
         try {
             const ref = subjects[matchRefId];
             const mov = subjects[matchMovId];
@@ -1635,10 +1630,10 @@ window.app = (() => {
             fillEl.style.width = '100%';
 
             await _refreshMatchViewer({ preserveOrientation: false });
-            _setStatus('Morph done — retopology complete');
+            setStatus('Morph done — retopology complete');
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Morph error: ${e.message}`);
+            setStatus(`Morph error: ${e.message}`);
             btn.disabled = false;
             fillEl.parentElement.style.display = 'none';
         }
@@ -1648,7 +1643,7 @@ window.app = (() => {
         if (!morphResult || !matchOutDir) return;
         btn.disabled = true;
         barWrap.style.display = 'block';
-        _setStatus('Running match optimisation…');
+        setStatus('Running match optimisation…');
         try {
             const ref = subjects[matchRefId];
             const mov = subjects[matchMovId];
@@ -1701,11 +1696,11 @@ window.app = (() => {
             matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: refFaces };
 
             await _refreshMatchViewer({ preserveOrientation: true });
-            _setStatus(`Match done — ${result.matched_ply.split('/').pop()}`);
+            setStatus(`Match done — ${result.matched_ply.split('/').pop()}`);
             await _loadExistingMatches();
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Match error: ${e.message}`);
+            setStatus(`Match error: ${e.message}`);
             btn.disabled = false;
             barWrap.style.display = 'none';
         }
@@ -1724,7 +1719,7 @@ window.app = (() => {
 
     async function _loadMatchFromDisk(m) {
         if (!m.has_match) return;
-        _setStatus(`Loading match ${m.name}…`);
+        setStatus(`Loading match ${m.name}…`);
 
         matchRefId  = m.ref_id;
         matchMovId  = m.mov_id;
@@ -1746,10 +1741,10 @@ window.app = (() => {
             matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: matchedNatRaw.faces };
 
             await _refreshMatchViewer({ preserveOrientation: false });
-            _setStatus(`Loaded ${m.name}`);
+            setStatus(`Loaded ${m.name}`);
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Load error: ${e.message}`);
+            setStatus(`Load error: ${e.message}`);
             matchResult = null; matchSurface = null;
             renderStep(currentStep);
         }
@@ -1759,10 +1754,10 @@ window.app = (() => {
         const existing = rowEl.querySelector('.remove-confirm');
         if (existing) { existing.remove(); return; }
 
-        const confirmEl = _el('div', { className: 'remove-confirm' });
+        const confirmEl = el('div', { className: 'remove-confirm' });
         confirmEl.textContent = `Delete ${m.name}? `;
 
-        const yesBtn = _el('button', { className: 'remove-confirm-yes' });
+        const yesBtn = el('button', { className: 'remove-confirm-yes' });
         yesBtn.textContent = 'Delete';
         yesBtn.onclick = async e => {
             e.stopPropagation();
@@ -1777,11 +1772,11 @@ window.app = (() => {
             if (sectionEl.querySelectorAll('.match-roster-row').length === 0) {
                 sectionEl.remove();
             }
-            _setStatus(`Deleted ${m.name}`);
+            setStatus(`Deleted ${m.name}`);
         };
         confirmEl.appendChild(yesBtn);
 
-        const noBtn = _el('button', { className: 'remove-confirm-no' });
+        const noBtn = el('button', { className: 'remove-confirm-no' });
         noBtn.textContent = 'Cancel';
         noBtn.onclick = e => { e.stopPropagation(); confirmEl.remove(); };
         confirmEl.appendChild(noBtn);
@@ -1802,32 +1797,32 @@ window.app = (() => {
 
         // ── Existing trajectories roster ─────────────────────────────────────
         if (existingTrajectories.length > 0) {
-            const sec = _el('div', { className: 'sph-section' });
-            const hdr = _el('div', { className: 'sph-label' });
+            const sec = el('div', { className: 'sph-section' });
+            const hdr = el('div', { className: 'sph-label' });
             hdr.textContent = 'Existing trajectories';
             sec.appendChild(hdr);
 
             existingTrajectories.forEach(t => {
-                const row = _el('div', { className: 'match-roster-row' });
+                const row = el('div', { className: 'match-roster-row' });
 
-                const nameEl = _el('span', { className: 'match-roster-name' });
+                const nameEl = el('span', { className: 'match-roster-name' });
                 nameEl.textContent = t.name;
                 nameEl.title = t.params?.seq?.join(' → ') || t.name;
                 row.appendChild(nameEl);
 
-                const info = _el('span', { className: 'match-roster-status' });
+                const info = el('span', { className: 'match-roster-status' });
                 const mode = t.params?.mode || 'raw';
                 info.textContent = `${t.n_frames} frames · ${mode}`;
                 row.appendChild(info);
 
-                const loadBtn = _el('button', { className: 'roster-load-btn' });
+                const loadBtn = el('button', { className: 'roster-load-btn' });
                 loadBtn.textContent = loadedTrajDir === t.dir ? 'Loaded' : 'Load';
                 loadBtn.disabled = !t.done || loadedTrajDir === t.dir;
                 loadBtn.setAttribute('aria-label', `Load trajectory ${t.name}`);
                 loadBtn.onclick = () => _loadTrajectoryFromDisk(t);
                 row.appendChild(loadBtn);
 
-                const delBtn = _el('button', { className: 'roster-del-btn' });
+                const delBtn = el('button', { className: 'roster-del-btn' });
                 delBtn.textContent = '✕';
                 delBtn.setAttribute('aria-label', `Delete trajectory ${t.name}`);
                 delBtn.onclick = () => _confirmDeleteTrajectory(t, row, sec);
@@ -1837,42 +1832,42 @@ window.app = (() => {
             });
 
             container.appendChild(sec);
-            container.appendChild(_el('div', { className: 'sph-divider' }));
+            container.appendChild(el('div', { className: 'sph-divider' }));
         }
 
         // ── New trajectory ────────────────────────────────────────────────────
         if (projectRoot) {
-            const newSec = _el('div', { className: 'sph-section' });
-            const newHdr = _el('div', { className: 'sph-label' });
+            const newSec = el('div', { className: 'sph-section' });
+            const newHdr = el('div', { className: 'sph-label' });
             newHdr.textContent = 'New trajectory';
             newSec.appendChild(newHdr);
 
             // Sequence list
-            const seqLabel = _el('div', { className: 'traj-seq-label' });
+            const seqLabel = el('div', { className: 'traj-seq-label' });
             seqLabel.textContent = 'Sequence (oldest → youngest)';
             newSec.appendChild(seqLabel);
 
-            const seqList = _el('div', { className: 'traj-seq-list' });
+            const seqList = el('div', { className: 'traj-seq-list' });
             trajSeq.forEach((id, i) => {
-                const pill = _el('div', { className: 'traj-seq-row' });
+                const pill = el('div', { className: 'traj-seq-row' });
 
-                const idEl = _el('span', { className: 'traj-seq-id' });
+                const idEl = el('span', { className: 'traj-seq-id' });
                 idEl.textContent = id;
                 pill.appendChild(idEl);
 
-                const upBtn = _el('button', { className: 'traj-seq-btn' });
+                const upBtn = el('button', { className: 'traj-seq-btn' });
                 upBtn.textContent = '▲'; upBtn.title = 'Move up';
                 upBtn.disabled = i === 0;
                 upBtn.onclick = () => { trajSeq.splice(i - 1, 0, trajSeq.splice(i, 1)[0]); renderStep(currentStep); };
                 pill.appendChild(upBtn);
 
-                const dnBtn = _el('button', { className: 'traj-seq-btn' });
+                const dnBtn = el('button', { className: 'traj-seq-btn' });
                 dnBtn.textContent = '▼'; dnBtn.title = 'Move down';
                 dnBtn.disabled = i === trajSeq.length - 1;
                 dnBtn.onclick = () => { trajSeq.splice(i + 1, 0, trajSeq.splice(i, 1)[0]); renderStep(currentStep); };
                 pill.appendChild(dnBtn);
 
-                const rmBtn = _el('button', { className: 'traj-seq-btn traj-seq-rm' });
+                const rmBtn = el('button', { className: 'traj-seq-btn traj-seq-rm' });
                 rmBtn.textContent = '✕';
                 rmBtn.onclick = () => { trajSeq.splice(i, 1); renderStep(currentStep); };
                 pill.appendChild(rmBtn);
@@ -1881,14 +1876,14 @@ window.app = (() => {
             });
 
             // Add subject row
-            const addRow = _el('div', { className: 'traj-add-row' });
-            const addSel = _el('select', { className: 'traj-add-select', id: 'traj-add-subject' });
-            const blankOpt = _el('option');
+            const addRow = el('div', { className: 'traj-add-row' });
+            const addSel = el('select', { className: 'traj-add-select', id: 'traj-add-subject' });
+            const blankOpt = el('option');
             blankOpt.value = ''; blankOpt.textContent = '— add subject —';
             addSel.appendChild(blankOpt);
             subjectOrder.forEach(sid => {
                 if (trajSeq.includes(sid)) return;
-                const opt = _el('option');
+                const opt = el('option');
                 opt.value = sid; opt.textContent = sid;
                 addSel.appendChild(opt);
             });
@@ -1901,8 +1896,8 @@ window.app = (() => {
 
             // Required pairs validation
             if (trajSeq.length >= 2) {
-                const pairsDiv = _el('div', { className: 'traj-pairs' });
-                const pairsLbl = _el('div', { className: 'sph-label' });
+                const pairsDiv = el('div', { className: 'traj-pairs' });
+                const pairsLbl = el('div', { className: 'sph-label' });
                 pairsLbl.textContent = 'Required matches';
                 pairsLbl.style.marginTop = '6px';
                 pairsDiv.appendChild(pairsLbl);
@@ -1918,7 +1913,7 @@ window.app = (() => {
                     const icon   = ok ? '◉' : '○';
                     const label  = invOk ? `${ref}_as_${mov} (inv)` : `${mov}_as_${ref}`;
                     const cls    = fwdOk ? 'traj-pair-ok' : (invOk ? 'traj-pair-inv' : 'traj-pair-miss');
-                    const pairRow = _el('div', { className: 'traj-pair-row' });
+                    const pairRow = el('div', { className: 'traj-pair-row' });
                     pairRow.innerHTML = `<span class="traj-pair-icon">${icon}</span>
                         <span class="traj-pair-name ${cls}">${label}</span>`;
                     pairsDiv.appendChild(pairRow);
@@ -1926,13 +1921,13 @@ window.app = (() => {
                 newSec.appendChild(pairsDiv);
 
                 // Mode selector
-                const modeRow = _el('div', { className: 'param-row' });
-                const modeLbl = _el('span', { className: 'param-label' });
+                const modeRow = el('div', { className: 'param-row' });
+                const modeLbl = el('span', { className: 'param-label' });
                 modeLbl.textContent = 'Mode';
                 modeRow.appendChild(modeLbl);
-                const modeGrp = _el('div', { className: 'steps-group' });
+                const modeGrp = el('div', { className: 'steps-group' });
                 ['raw', 'smooth'].forEach(m => {
-                    const btn = _el('button', { className: `step-seg${trajMode === m ? ' active' : ''}` });
+                    const btn = el('button', { className: `step-seg${trajMode === m ? ' active' : ''}` });
                     btn.textContent = m.charAt(0).toUpperCase() + m.slice(1);
                     btn.onclick = () => { trajMode = m; renderStep(currentStep); };
                     modeGrp.appendChild(btn);
@@ -1942,16 +1937,16 @@ window.app = (() => {
 
                 // Advanced parameters (smooth mode only)
                 if (trajMode === 'smooth') {
-                    const adv = _el('details', { className: 'advanced-details' });
-                    const sum = _el('summary');
+                    const adv = el('details', { className: 'advanced-details' });
+                    const sum = el('summary');
                     sum.textContent = 'Advanced';
                     adv.appendChild(sum);
 
                     const _paramRow = (label, get, set, min, max, step) => {
-                        const row = _el('div', { className: 'param-row' });
-                        const lbl = _el('span', { className: 'param-label' }); lbl.textContent = label; row.appendChild(lbl);
-                        const slider = _el('input'); slider.type = 'range'; slider.min = min; slider.max = max; slider.step = step; slider.value = get();
-                        const num = _el('input', { type: 'number', className: 'param-val' }); num.min = min; num.max = max; num.step = step; num.value = get();
+                        const row = el('div', { className: 'param-row' });
+                        const lbl = el('span', { className: 'param-label' }); lbl.textContent = label; row.appendChild(lbl);
+                        const slider = el('input'); slider.type = 'range'; slider.min = min; slider.max = max; slider.step = step; slider.value = get();
+                        const num = el('input', { type: 'number', className: 'param-val' }); num.min = min; num.max = max; num.step = step; num.value = get();
                         slider.oninput = () => { set(parseFloat(slider.value)); num.value = slider.value; };
                         num.oninput = () => { const v = Math.min(max, Math.max(min, parseFloat(num.value) || min)); set(v); slider.value = v; };
                         row.appendChild(slider); row.appendChild(num);
@@ -1963,9 +1958,9 @@ window.app = (() => {
                     adv.appendChild(_paramRow('Spatial smooth', () => trajNSpatialSmooth, v => { trajNSpatialSmooth = v; }, 0, 10, 1));
                     adv.appendChild(_paramRow('λ spatial', () => trajLambdaSpatial, v => { trajLambdaSpatial = v; }, 0.001, 0.1, 0.001));
 
-                    const icpRow = _el('div', { className: 'param-row' });
-                    const icpLbl = _el('span', { className: 'param-label' }); icpLbl.textContent = 'ICP align'; icpRow.appendChild(icpLbl);
-                    const icpCb = _el('input'); icpCb.type = 'checkbox'; icpCb.checked = trajDoIcp;
+                    const icpRow = el('div', { className: 'param-row' });
+                    const icpLbl = el('span', { className: 'param-label' }); icpLbl.textContent = 'ICP align'; icpRow.appendChild(icpLbl);
+                    const icpCb = el('input'); icpCb.type = 'checkbox'; icpCb.checked = trajDoIcp;
                     icpCb.onchange = () => { trajDoIcp = icpCb.checked; };
                     icpRow.appendChild(icpCb);
                     adv.appendChild(icpRow);
@@ -1974,36 +1969,36 @@ window.app = (() => {
                 }
 
                 // Run button
-                const runBtn = _el('button', { className: 'load-btn', style: 'margin-top:8px' });
+                const runBtn = el('button', { className: 'load-btn', style: 'margin-top:8px' });
                 runBtn.textContent = 'Run Trajectory';
                 runBtn.disabled = !allPairsOk;
                 runBtn.onclick = () => _runTrajectory();
                 newSec.appendChild(runBtn);
             } else {
-                const hint = _el('div', { className: 'match-desc' });
+                const hint = el('div', { className: 'match-desc' });
                 hint.textContent = 'Add ≥ 2 subjects to define a trajectory sequence.';
                 newSec.appendChild(hint);
             }
 
             container.appendChild(newSec);
-            container.appendChild(_el('div', { className: 'sph-divider' }));
+            container.appendChild(el('div', { className: 'sph-divider' }));
         }
 
         // ── Playback ──────────────────────────────────────────────────────────
-        const playSec = _el('div', { className: 'sph-section' });
-        const playHdr = _el('div', { className: 'sph-label' });
+        const playSec = el('div', { className: 'sph-section' });
+        const playHdr = el('div', { className: 'sph-label' });
         playHdr.textContent = 'Playback';
         playSec.appendChild(playHdr);
 
         if (!projectRoot && !player?.isLoaded) {
-            const demoBtn = _el('button', { className: 'load-btn' });
+            const demoBtn = el('button', { className: 'load-btn' });
             demoBtn.textContent = 'Load demo trajectory';
             demoBtn.onclick = () => _loadTrajectoryDemo();
             playSec.appendChild(demoBtn);
         }
 
         if (player?.isLoaded) {
-            const info = _el('div', { className: 'traj-info' });
+            const info = el('div', { className: 'traj-info' });
             info.textContent = `${player.frameCount} frames`;
             if (loadedTrajDir) {
                 const traj = existingTrajectories.find(t => t.dir === loadedTrajDir);
@@ -2012,9 +2007,9 @@ window.app = (() => {
             playSec.appendChild(info);
 
             // Play/pause + scrubber row
-            const ctrlRow = _el('div', { className: 'traj-ctrl-row' });
+            const ctrlRow = el('div', { className: 'traj-ctrl-row' });
 
-            const playBtn = _el('button', { className: 'traj-play-rp', id: 'rp-traj-play' });
+            const playBtn = el('button', { className: 'traj-play-rp', id: 'rp-traj-play' });
             playBtn.textContent = player.isPlaying ? '⏸' : '▶';
             playBtn.title = 'Play / Pause';
             playBtn.setAttribute('aria-label', 'Play / Pause trajectory');
@@ -2024,7 +2019,7 @@ window.app = (() => {
             };
             ctrlRow.appendChild(playBtn);
 
-            const scrubber = _el('input');
+            const scrubber = el('input');
             scrubber.type = 'range'; scrubber.id = 'rp-traj-scrubber';
             scrubber.className = 'traj-scrub-rp';
             scrubber.min = '0'; scrubber.max = '1000'; scrubber.step = '1';
@@ -2037,14 +2032,14 @@ window.app = (() => {
             };
             ctrlRow.appendChild(scrubber);
 
-            const timeEl = _el('span', { className: 'traj-time-rp', id: 'rp-traj-time' });
+            const timeEl = el('span', { className: 'traj-time-rp', id: 'rp-traj-time' });
             timeEl.textContent = player.t.toFixed(2);
             ctrlRow.appendChild(timeEl);
             playSec.appendChild(ctrlRow);
 
-            const speedRow = _el('div', { className: 'traj-row' });
+            const speedRow = el('div', { className: 'traj-row' });
             speedRow.innerHTML = '<label>Speed</label>';
-            const speedInput = _el('input');
+            const speedInput = el('input');
             speedInput.type = 'range'; speedInput.min = '1'; speedInput.max = '12';
             speedInput.step = '0.5';
             // player.speed is one-direction duration (seconds); invert so slider right = faster
@@ -2054,9 +2049,9 @@ window.app = (() => {
             speedRow.appendChild(speedInput);
             playSec.appendChild(speedRow);
 
-            const ppRow = _el('div', { className: 'traj-row' });
-            const ppLabel = _el('label', { className: 'traj-pp-label' });
-            const ppCheck = _el('input');
+            const ppRow = el('div', { className: 'traj-row' });
+            const ppLabel = el('label', { className: 'traj-pp-label' });
+            const ppCheck = el('input');
             ppCheck.type = 'checkbox'; ppCheck.id = 'rp-traj-pingpong';
             ppCheck.checked = player.pingPong;
             ppCheck.setAttribute('aria-label', 'Forth and back playback');
@@ -2066,7 +2061,7 @@ window.app = (() => {
             ppRow.appendChild(ppLabel);
             playSec.appendChild(ppRow);
         } else {
-            const hint = _el('div', { className: 'match-desc' });
+            const hint = el('div', { className: 'match-desc' });
             hint.textContent = 'No trajectory loaded.';
             playSec.appendChild(hint);
         }
@@ -2075,7 +2070,7 @@ window.app = (() => {
     }
 
     async function _loadTrajectoryFromDisk(traj) {
-        _setStatus(`Loading trajectory ${traj.name}…`);
+        setStatus(`Loading trajectory ${traj.name}…`);
         try {
             const trajPath = traj.dir + '/trajectory';
             const files = await apiGet('/api/files', { dir: trajPath });
@@ -2102,10 +2097,10 @@ window.app = (() => {
                 if (p.n_spatial_smooth != null)     trajNSpatialSmooth = p.n_spatial_smooth;
                 if (p.lambda_spatial != null)       trajLambdaSpatial  = p.lambda_spatial;
             }
-            _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
+            setStatus(`Trajectory loaded — ${player.frameCount} frames`);
             renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Trajectory load error: ${e.message}`);
+            setStatus(`Trajectory load error: ${e.message}`);
         }
     }
 
@@ -2113,7 +2108,7 @@ window.app = (() => {
         if (!projectRoot || trajSeq.length < 2) return;
         const suffix    = trajMode === 'smooth' ? '_smooth' : '';
         const traj_name = trajSeq.join('-') + suffix;
-        _setStatus('Submitting trajectory job…');
+        setStatus('Submitting trajectory job…');
         try {
             const { job_id, out_dir } = await startTrajectory({
                 project_root:        projectRoot,
@@ -2126,14 +2121,14 @@ window.app = (() => {
                 n_spatial_smooth:    trajNSpatialSmooth,
                 lambda_spatial:      trajLambdaSpatial,
             });
-            await pollJob(job_id, { onProgress: p => _setStatus(`Trajectory: ${Math.round(p * 100)}%`) });
-            _setStatus('Trajectory done — loading…');
+            await pollJob(job_id, { onProgress: p => setStatus(`Trajectory: ${Math.round(p * 100)}%`) });
+            setStatus('Trajectory done — loading…');
             await _loadExistingTrajectories();
             const traj = existingTrajectories.find(t => t.dir === out_dir);
             if (traj) await _loadTrajectoryFromDisk(traj);
             else renderStep(currentStep);
         } catch (e) {
-            _setStatus(`Trajectory error: ${e.message}`);
+            setStatus(`Trajectory error: ${e.message}`);
             renderStep(currentStep);
         }
     }
@@ -2142,10 +2137,10 @@ window.app = (() => {
         const existing = rowEl.querySelector('.remove-confirm');
         if (existing) { existing.remove(); return; }
 
-        const confirmEl = _el('div', { className: 'remove-confirm' });
+        const confirmEl = el('div', { className: 'remove-confirm' });
         confirmEl.textContent = `Delete ${traj.name}? `;
 
-        const yesBtn = _el('button', { className: 'remove-confirm-yes' });
+        const yesBtn = el('button', { className: 'remove-confirm-yes' });
         yesBtn.textContent = 'Delete';
         yesBtn.onclick = async e => {
             e.stopPropagation();
@@ -2159,11 +2154,11 @@ window.app = (() => {
             if (secEl.querySelectorAll('.match-roster-row').length === 0) {
                 secEl.remove();
             }
-            _setStatus(`Deleted ${traj.name}`);
+            setStatus(`Deleted ${traj.name}`);
         };
         confirmEl.appendChild(yesBtn);
 
-        const noBtn = _el('button', { className: 'remove-confirm-no' });
+        const noBtn = el('button', { className: 'remove-confirm-no' });
         noBtn.textContent = 'Cancel';
         noBtn.onclick = e => { e.stopPropagation(); confirmEl.remove(); };
         confirmEl.appendChild(noBtn);
@@ -2172,7 +2167,7 @@ window.app = (() => {
     }
 
     async function _loadTrajectoryDemo() {
-        _setStatus('Loading trajectory demo…');
+        setStatus('Loading trajectory demo…');
         const urls = TRAJ_DEMO_RELS.map(rel => meshUrl(dataRoot + '/' + rel));
         try {
             if (!player) {
@@ -2182,10 +2177,10 @@ window.app = (() => {
             window._player = player;
             await player.load(urls);
             loadedTrajDir = null;
-            _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
+            setStatus(`Trajectory loaded — ${player.frameCount} frames`);
             _renderTrajectoryPanel(document.getElementById('rpanel-content'));
         } catch (e) {
-            _setStatus(`Trajectory error: ${e.message}`);
+            setStatus(`Trajectory error: ${e.message}`);
         }
     }
 
@@ -2197,15 +2192,6 @@ window.app = (() => {
         if (timeEl) timeEl.textContent = t.toFixed(2);
         const playBtn = document.getElementById('rp-traj-play');
         if (playBtn && player) playBtn.textContent = player.isPlaying ? '⏸' : '▶';
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-    function _el(tag, props = {}) {
-        return Object.assign(document.createElement(tag), props);
-    }
-
-    function _setStatus(msg) {
-        document.getElementById('status-msg').textContent = msg;
     }
 
     // ── Debug helpers (manual testing only, see debug.js) ────────────────────
