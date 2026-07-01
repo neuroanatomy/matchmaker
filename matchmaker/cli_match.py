@@ -26,6 +26,7 @@ Options:
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from matchmaker import pipeline
@@ -167,7 +168,6 @@ def main():
     # Write params.json for provenance
     ref_id = ref_comp["subject_id"] or ref_ply.stem
     mov_id = mov_comp["subject_id"] or mov_ply.stem
-    from datetime import datetime, timezone
     params = {
         "ref_id":  ref_id,
         "mov_id":  mov_id,

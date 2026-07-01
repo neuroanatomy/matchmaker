@@ -19,6 +19,13 @@ _tool_roots = [
     _pkg_dir.parent / "homogeneous",
 ]
 
+# spherize()'s homogeneous.py resampling parameters — fixed for reproducibility
+# (see CLAUDE.md "Match Parameters and Reproducibility"); not user-configurable.
+_SPHERIZE_N = 5000  # target vertex count
+_SPHERIZE_S = 0.3   # alpha
+_SPHERIZE_T = 0.5   # tau
+_SPHERIZE_A = 25    # aspect-ratio
+
 
 def _find_bin(rel: str) -> str:
     for root in _bin_roots:
@@ -140,10 +147,10 @@ def spherize(input_path: str, *, out_dir: str = None, progress=None) -> dict:
             [sys.executable, homogeneous,
              "-i", tmp2,
              "-o", sphere_path,
-             "-n", "5000",
-             "-s", "0.3",   # alpha
-             "-t", "0.5",   # tau
-             "-a", "25"],   # aspect-ratio
+             "-n", str(_SPHERIZE_N),
+             "-s", str(_SPHERIZE_S),
+             "-t", str(_SPHERIZE_T),
+             "-a", str(_SPHERIZE_A)],
             capture_output=True,
         )
         if r.returncode != 0:

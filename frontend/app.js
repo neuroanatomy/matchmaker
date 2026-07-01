@@ -131,7 +131,6 @@ window.app = (() => {
         if (prev === 5 && n !== 5) {
             player?.pause();
             viewer.clearAll();
-            _showTrajectoryBar(false);
         }
         currentStep = n;
         _activateStep(n);
@@ -143,7 +142,6 @@ window.app = (() => {
             viewer.clearAll();
             if (player?.isLoaded) {
                 player.reattach(viewer);
-                _showTrajectoryBar(true);
             }
         }
         if (prev === 4 && (n === 1 || n === 2) && viewedSubjectId && viewState[viewedSubjectId]?.meshType) {
@@ -1578,8 +1576,6 @@ window.app = (() => {
 
             const sulciRefData = alignInMemory[matchRefId] ?? await apiGet('/api/file', { path: ref.sulci });
             const sulciMovData = alignInMemory[matchMovId] ?? await apiGet('/api/file', { path: mov.sulci });
-            console.log('[runMorph] ref:', alignInMemory[matchRefId] ? `in-memory (${alignInMemory[matchRefId].length} regions)` : `disk (${ref.sulci})`);
-            console.log('[runMorph] mov:', alignInMemory[matchMovId] ? `in-memory (${alignInMemory[matchMovId].length} regions)` : `disk (${mov.sulci})`);
             fillEl.style.width = '15%';
 
             if (!matchOutDir) {
@@ -2107,7 +2103,6 @@ window.app = (() => {
                 if (p.lambda_spatial != null)       trajLambdaSpatial  = p.lambda_spatial;
             }
             _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
-            _showTrajectoryBar(true);
             renderStep(currentStep);
         } catch (e) {
             _setStatus(`Trajectory load error: ${e.message}`);
@@ -2188,7 +2183,6 @@ window.app = (() => {
             await player.load(urls);
             loadedTrajDir = null;
             _setStatus(`Trajectory loaded — ${player.frameCount} frames`);
-            _showTrajectoryBar(true);
             _renderTrajectoryPanel(document.getElementById('rpanel-content'));
         } catch (e) {
             _setStatus(`Trajectory error: ${e.message}`);
@@ -2196,8 +2190,6 @@ window.app = (() => {
     }
 
     // ── Trajectory helpers ───────────────────────────────────────────────────
-    function _showTrajectoryBar(_show) { /* scrubber now lives in the right panel */ }
-
     function _updateScrubber(t) {
         const scrubber = document.getElementById('rp-traj-scrubber');
         if (scrubber) scrubber.value = Math.round(t * 1000);
@@ -2216,33 +2208,15 @@ window.app = (() => {
         document.getElementById('status-msg').textContent = msg;
     }
 
-    // ── Debug helpers ────────────────────────────────────────────────────────
-    function _showLandmark(name, id, src, srcLabel) {
-        if (!src) { console.log(`[showLandmark] ${id} — no data (${srcLabel} is null)`); return; }
-        const reg = src.find(r => r.name === name);
-        if (!reg) { console.log(`[showLandmark] "${name}" not found in ${id}/${srcLabel} — regions: ${src.map(r=>r.name).join(', ')}`); return; }
-        console.log(`[showLandmark] "${name}" id=${id} src=${srcLabel} — ${reg.path0.length} points:`);
-        reg.path0.forEach((p, i) => console.log(`  [${i}] px=${p.px.toFixed(4)}  py=${p.py.toFixed(4)}`));
-        return reg.path0;
+    // ── Debug helpers (manual testing only, see debug.js) ────────────────────
+    if (new URLSearchParams(location.search).has('debug')) {
+        import('./debug.js').then(({ installDebugHelpers }) => installDebugHelpers({
+            getAlignSubjectId: () => alignSubjectId,
+            getAlignOverlay:   () => alignOverlay,
+            getAlignInMemory:  () => alignInMemory,
+            getMatchRefId:     () => matchRefId,
+        }));
     }
-
-    window.showAlignIHF = (name='IHF', id) => {
-        const targetId = id ?? alignSubjectId;
-        if (targetId === alignSubjectId && alignOverlay) {
-            alignOverlay._saveRef();
-            const reg = alignOverlay.regions.find(r => r.name === name);
-            if (!reg) { console.log(`[showAlignIHF] "${name}" not found — regions: ${alignOverlay.regions.map(r=>r.name).join(', ')}`); return; }
-            console.log(`[showAlignIHF] "${name}" subject=${alignSubjectId} src=LIVE — ${reg.path0.length} points:`);
-            reg.path0.forEach((p, i) => console.log(`  [${i}] px=${p.px.toFixed(4)}  py=${p.py.toFixed(4)}`));
-            return reg.path0;
-        }
-        return _showLandmark(name, targetId, alignInMemory[targetId], `alignInMemory[${targetId}]`);
-    };
-
-    window.showMatchIHF = (name='IHF', id) => {
-        const targetId = id ?? matchRefId;
-        return _showLandmark(name, targetId, alignInMemory[targetId], `alignInMemory[${targetId}]`);
-    };
 
     // ── Public API ───────────────────────────────────────────────────────────
     return { init, goStep, loadMeshByPath };

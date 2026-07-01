@@ -32,7 +32,9 @@ def main():
     from matchmaker.server import create_app
     app = create_app(data_root=data_root)
 
-    # Open browser after a short delay so the server is ready
+    # Open browser after a short delay so the server is ready. 0.8s is a fixed
+    # guess (not a readiness poll) — long enough for Flask to bind the port on
+    # a typical machine without adding a noticeable startup delay.
     def _open():
         import time
         time.sleep(0.8)

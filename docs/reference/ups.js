@@ -1,3 +1,8 @@
+// NOTE: relocated here from frontend/components/ups.js on 2026-07-01
+// (docs/29.code-improvement-plan.md, Phase 1 / F1) — confirmed unused by any
+// import in frontend/, kept only as a reference implementation. The relative
+// import below is stale (this file is no longer part of the active component
+// tree) and it is NOT loaded by the app.
 import { API } from '../api.js';
 
 /**
