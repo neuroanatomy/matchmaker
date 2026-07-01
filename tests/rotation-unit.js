@@ -8,45 +8,20 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+    _matMul3,
+    eulerZYXToMatrix as _eulerToMatrix,
+    matrixToEulerZYX as _matrixToEuler,
+} from '../frontend/components/stereoview.js';
 
-// ── Reproduced from stereoview.js (same formulas) ────────────────────────────
-
-function _matMul3(A, B) {
-    const C = [[0,0,0],[0,0,0],[0,0,0]];
-    for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++)
-            for (let k = 0; k < 3; k++)
-                C[i][j] += A[i][k] * B[k][j];
-    return C;
-}
-
-function _eulerToMatrix(alpha, beta, gamma) {
-    const toRad = d => d * Math.PI / 180;
-    const a = toRad(alpha), b = toRad(beta), g = toRad(gamma);
-    const ca = Math.cos(a), sa = Math.sin(a);
-    const cb = Math.cos(b), sb = Math.sin(b);
-    const cg = Math.cos(g), sg = Math.sin(g);
-    return [
-        [ ca*cb,  ca*sb*sg - sa*cg,  ca*sb*cg + sa*sg ],
-        [ sa*cb,  sa*sb*sg + ca*cg,  sa*sb*cg - ca*sg ],
-        [ -sb,    cb*sg,             cb*cg            ],
-    ];
-}
-
-function _matrixToEuler(R) {
-    const beta  = Math.asin(Math.max(-1, Math.min(1, -R[2][0])));
-    const cb    = Math.cos(beta);
-    let alpha, gamma;
-    if (cb > 1e-6) {
-        alpha = Math.atan2(R[1][0], R[0][0]);
-        gamma = Math.atan2(R[2][1], R[2][2]);
-    } else {
-        alpha = Math.atan2(-R[0][1], R[1][1]);
-        gamma = 0;
-    }
-    const toDeg = v => Math.round(v * 180 / Math.PI);
-    return { alpha: toDeg(alpha), beta: toDeg(beta), gamma: toDeg(gamma) };
-}
+// ── Imported from stereoview.js (real implementation, not a copy) ────────────
+//
+// Previously this file hand-copied the formulas below to test them "in
+// isolation," since StereoView.getEulerZYX()/setEulerZYX() were private
+// methods with no exported pure functions. That meant a regression in the
+// real math would not be caught here — only a bug in the copy would be.
+// stereoview.js now exports eulerZYXToMatrix/matrixToEulerZYX/_matMul3 as
+// pure functions that the class methods delegate to (docs/29 Phase 0b, F8).
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

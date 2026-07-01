@@ -302,34 +302,11 @@ void main() {
 
     // ZYX intrinsic Euler angles in degrees: {alpha=Rz(twist), beta=Ry(tilt↕), gamma=Rx(spin↔)}
     getEulerZYX() {
-        const R = this._R;
-        const beta  = Math.asin(Math.max(-1, Math.min(1, -R[2][0])));
-        const cb    = Math.cos(beta);
-        let alpha, gamma;
-        if (cb > 1e-6) {
-            alpha = Math.atan2(R[1][0], R[0][0]);
-            gamma = Math.atan2(R[2][1], R[2][2]);
-        } else {
-            // Gimbal lock: fold all rotation into alpha
-            alpha = Math.atan2(-R[0][1], R[1][1]);
-            gamma = 0;
-        }
-        const toDeg = v => Math.round(v * 180 / Math.PI);
-        return { alpha: toDeg(alpha), beta: toDeg(beta), gamma: toDeg(gamma) };
+        return matrixToEulerZYX(this._R);
     }
 
     setEulerZYX(alpha, beta, gamma) {
-        const toRad = d => d * Math.PI / 180;
-        const a = toRad(alpha), b = toRad(beta), g = toRad(gamma);
-        const ca = Math.cos(a), sa = Math.sin(a);
-        const cb = Math.cos(b), sb = Math.sin(b);
-        const cg = Math.cos(g), sg = Math.sin(g);
-        // R = Rz(a) · Ry(b) · Rx(g)
-        this._R = [
-            [ ca*cb,  ca*sb*sg - sa*cg,  ca*sb*cg + sa*sg ],
-            [ sa*cb,  sa*sb*sg + ca*cg,  sa*sb*cg - ca*sg ],
-            [ -sb,    cb*sg,             cb*cg            ],
-        ];
+        this._R = eulerZYXToMatrix(alpha, beta, gamma);
         this._render();
         this._onRotationChange?.();
     }
@@ -383,11 +360,45 @@ void main() {
     }
 }
 
-function _matMul3(A, B) {
+export function _matMul3(A, B) {
     const C = [[0,0,0],[0,0,0],[0,0,0]];
     for (let i = 0; i < 3; i++)
         for (let j = 0; j < 3; j++)
             for (let k = 0; k < 3; k++)
                 C[i][j] += A[i][k] * B[k][j];
     return C;
+}
+
+// ZYX intrinsic Euler angles (degrees) ↔ 3×3 rotation matrix.
+// Pure functions so they can be unit-tested directly (see tests/rotation-unit.js)
+// instead of the test hand-copying this math, which let a real bug slip past
+// the test suite (docs/29.code-improvement-plan.md, F8).
+export function matrixToEulerZYX(R) {
+    const beta  = Math.asin(Math.max(-1, Math.min(1, -R[2][0])));
+    const cb    = Math.cos(beta);
+    let alpha, gamma;
+    if (cb > 1e-6) {
+        alpha = Math.atan2(R[1][0], R[0][0]);
+        gamma = Math.atan2(R[2][1], R[2][2]);
+    } else {
+        // Gimbal lock: fold all rotation into alpha
+        alpha = Math.atan2(-R[0][1], R[1][1]);
+        gamma = 0;
+    }
+    const toDeg = v => Math.round(v * 180 / Math.PI);
+    return { alpha: toDeg(alpha), beta: toDeg(beta), gamma: toDeg(gamma) };
+}
+
+export function eulerZYXToMatrix(alpha, beta, gamma) {
+    const toRad = d => d * Math.PI / 180;
+    const a = toRad(alpha), b = toRad(beta), g = toRad(gamma);
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const cb = Math.cos(b), sb = Math.sin(b);
+    const cg = Math.cos(g), sg = Math.sin(g);
+    // R = Rz(a) · Ry(b) · Rx(g)
+    return [
+        [ ca*cb,  ca*sb*sg - sa*cg,  ca*sb*cg + sa*sg ],
+        [ sa*cb,  sa*sb*sg + ca*cg,  sa*sb*cg - ca*sg ],
+        [ -sb,    cb*sg,             cb*cg            ],
+    ];
 }

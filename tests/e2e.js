@@ -948,3 +948,271 @@ test('M-11: Delete ✕ shows confirmation; Cancel keeps the row', async () => {
     // Cleanup
     await fs.rm(matchDir, { recursive: true, force: true });
 });
+
+// ── Preprocess step tests (P-01 through P-03) ────────────────────────────────
+//
+// F02_P0/F06_P4 quick-load pills auto-detect the bundled test project and its
+// pre-computed sphere/curv/sulc companions (see _loadSubject's project-path
+// regex in app.js), so the Spherize/Compute maps buttons never render for
+// them — there's nothing left to compute. These tests instead load a copy of
+// the raw mesh from OUTSIDE that project structure (no companions, no
+// project auto-detection), so the buttons actually appear and can be
+// exercised end-to-end against the real spherize()/compute_curvature()
+// pipeline (docs/29.code-improvement-plan.md Phase 0c).
+
+const PREPROCESS_TMP_DIR  = path.join(PROJECT_ROOT, 'data/external/e2e_preprocess_tmp');
+const PREPROCESS_MESH_ABS = path.join(PREPROCESS_TMP_DIR, 'mesh.ply');
+
+test('P-01: Preprocess panel renders Spherize/Compute maps for a subject with no companions', async () => {
+    const fs = await import('node:fs/promises');
+    await fs.mkdir(PREPROCESS_TMP_DIR, { recursive: true });
+    await fs.copyFile(MESH_ABS_PATH, PREPROCESS_MESH_ABS);
+
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.evaluate(async (p) => { await window.app.loadMeshByPath(p); }, PREPROCESS_MESH_ABS);
+    await new Promise(r => setTimeout(r, 500));
+
+    await page.click('[data-step="2"]');
+    await new Promise(r => setTimeout(r, 300));
+
+    const state = await page.evaluate(() => ({
+        hasRoster: !!document.querySelector('.subject-roster'),
+        missingSphere: [...document.querySelectorAll('.pre-check.pre-missing')]
+            .some(el => el.textContent.includes('Sphere')),
+        missingCurv: [...document.querySelectorAll('.pre-check.pre-missing')]
+            .some(el => el.textContent.includes('Curvature')),
+        hasSpherizeBtn: [...document.querySelectorAll('button')]
+            .some(b => b.textContent.trim() === 'Spherize'),
+        hasComputeBtn: [...document.querySelectorAll('button')]
+            .some(b => b.textContent.trim() === 'Compute maps'),
+    }));
+
+    assert.ok(state.hasRoster, 'Preprocess panel should render the subject roster');
+    assert.ok(state.missingSphere, 'Fresh subject should show ✗ for Sphere');
+    assert.ok(state.missingCurv, 'Fresh subject should show ✗ for Curvature');
+    assert.ok(state.hasSpherizeBtn, 'Spherize button should be present for a subject with no sphere');
+    assert.ok(state.hasComputeBtn, 'Compute maps button should be present for a subject with no maps');
+});
+
+test('P-02: clicking Spherize runs the job and flips the Sphere chip to done', async () => {
+    await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('button')]
+            .find(b => b.textContent.trim() === 'Spherize');
+        if (!btn) throw new Error('Spherize button not found');
+        btn.click();
+    });
+
+    // Real spherize() runs meshparam/meshgeometry/homogeneous subprocesses (~10s)
+    await waitForStatus(page, 'sphere ready', 60_000);
+
+    const doneChip = await page.evaluate(() =>
+        [...document.querySelectorAll('.pre-check.pre-done')]
+            .some(el => el.textContent.includes('Sphere')));
+    assert.ok(doneChip, '✓ Sphere chip should appear after spherize completes');
+
+    const stillHasBtn = await page.evaluate(() =>
+        [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Spherize'));
+    assert.ok(!stillHasBtn, 'Spherize button should disappear once the sphere exists');
+});
+
+test('P-03: clicking Compute maps runs the job and flips curvature/sulcal chips to done', async () => {
+    await page.evaluate(() => {
+        const btn = [...document.querySelectorAll('button')]
+            .find(b => b.textContent.trim() === 'Compute maps');
+        if (!btn) throw new Error('Compute maps button not found');
+        btn.click();
+    });
+
+    await waitForStatus(page, 'maps ready', 30_000);
+
+    const state = await page.evaluate(() => ({
+        curv: [...document.querySelectorAll('.pre-check.pre-done')].some(el => el.textContent.includes('Curvature')),
+        sulc: [...document.querySelectorAll('.pre-check.pre-done')].some(el => el.textContent.includes('Sulcal depth')),
+    }));
+    assert.ok(state.curv, '✓ Curvature chip should appear after compute-maps completes');
+    assert.ok(state.sulc, '✓ Sulcal depth chip should appear after compute-maps completes');
+
+    // Cleanup temp mesh + generated companions (spherize/compute_curvature wrote
+    // sphere.ply/curv.txt.gz/sulc.txt.gz alongside PREPROCESS_MESH_ABS since no
+    // project — i.e. no out_dir — was active)
+    const fs = await import('node:fs/promises');
+    await fs.rm(PREPROCESS_TMP_DIR, { recursive: true, force: true });
+});
+
+// ── Error-path test (ERR-01) ─────────────────────────────────────────────────
+
+test('ERR-01: Run Morph with missing companions surfaces a status error, not a crash', async () => {
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.click('[data-step="1"]');
+    await new Promise(r => setTimeout(r, 300));
+    await clickPill(page, 'F02_P0');
+    await waitForStatus(page, 'mesh.ply loaded');
+    await new Promise(r => setTimeout(r, 500));
+
+    await page.click('[data-step="4"]');
+    await new Promise(r => setTimeout(r, 300));
+
+    const pageErrors = [];
+    const onPageError = e => pageErrors.push(e.message);
+    page.on('pageerror', onPageError);
+
+    // Only one subject loaded → matchMovId is null → #btn-run-morph is
+    // disabled in the DOM. Invoke its bound handler directly (bypassing the
+    // native disabled-click no-op) to exercise the same _runMorph() code
+    // path a stray click or future UI bug could reach.
+    await page.evaluate(() => {
+        const btn = document.getElementById('btn-run-morph');
+        if (!btn) throw new Error('#btn-run-morph not found');
+        btn.onclick();
+    });
+
+    await waitForStatus(page, 'morph error', 10_000);
+    page.off('pageerror', onPageError);
+
+    assert.equal(pageErrors.length, 0,
+        `Expected no uncaught page errors, got: ${pageErrors.join('; ')}`);
+});
+
+// ── Trajectory step tests (T-E-01 through T-E-04) ────────────────────────────
+
+const TRAJ_MATCH_DIR = path.join(
+    PROJECT_ROOT, 'data/external/project/data/derived/matches/F06_P4_as_F02_P0'
+);
+const TRAJ_DIR = path.join(
+    PROJECT_ROOT, 'data/external/project/data/derived/trajectories/e2e_test_traj'
+);
+
+test('T-E-01: Trajectory panel renders the sequence picker after loading subjects', async () => {
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.click('[data-step="1"]');
+    await new Promise(r => setTimeout(r, 300));
+    await clickPill(page, 'F02_P0');
+    await waitForStatus(page, 'mesh.ply loaded');
+    await new Promise(r => setTimeout(r, 400));
+    await clickPill(page, 'F06_P4');
+    await waitForStatus(page, 'mesh.ply loaded');
+    await new Promise(r => setTimeout(r, 400));
+
+    await page.click('[data-step="5"]');
+    await new Promise(r => setTimeout(r, 800));
+
+    const addSelectOptions = await page.evaluate(() => {
+        const sel = document.getElementById('traj-add-subject');
+        return sel ? [...sel.options].map(o => o.value).filter(Boolean) : null;
+    });
+    assert.ok(addSelectOptions, '#traj-add-subject should be present');
+    assert.ok(addSelectOptions.includes('F02_P0'), 'F02_P0 should be selectable');
+    assert.ok(addSelectOptions.includes('F06_P4'), 'F06_P4 should be selectable');
+});
+
+test('T-E-02: sequence picker adds subjects and prevents duplicates', async () => {
+    await page.select('#traj-add-subject', 'F02_P0');
+    await new Promise(r => setTimeout(r, 300));
+
+    let seqIds = await page.evaluate(() =>
+        [...document.querySelectorAll('.traj-seq-id')].map(el => el.textContent));
+    assert.deepEqual(seqIds, ['F02_P0'], 'F02_P0 should appear in the sequence list');
+
+    const remainingOptions = await page.evaluate(() =>
+        [...document.getElementById('traj-add-subject').options].map(o => o.value).filter(Boolean));
+    assert.ok(!remainingOptions.includes('F02_P0'),
+        'F02_P0 should be removed from the add-subject dropdown once added (no duplicates)');
+
+    await page.select('#traj-add-subject', 'F06_P4');
+    await new Promise(r => setTimeout(r, 300));
+
+    seqIds = await page.evaluate(() =>
+        [...document.querySelectorAll('.traj-seq-id')].map(el => el.textContent));
+    assert.deepEqual(seqIds, ['F02_P0', 'F06_P4'], 'Sequence should now be [F02_P0, F06_P4]');
+});
+
+test('T-E-03: Run Trajectory is disabled until the required adjacent-pair match exists', async () => {
+    // Precondition: trajSeq = [F02_P0, F06_P4] from T-E-02; no match seeded yet
+    let state = await page.evaluate(() => {
+        const runBtn = [...document.querySelectorAll('button')]
+            .find(b => b.textContent.trim() === 'Run Trajectory');
+        const pairRow = document.querySelector('.traj-pair-row .traj-pair-name');
+        return { disabled: runBtn?.disabled, pairClass: pairRow?.className };
+    });
+    assert.equal(state.disabled, true, 'Run Trajectory should be disabled when the pair match is missing');
+    assert.ok(state.pairClass?.includes('traj-pair-miss'),
+        `Pair row should be marked missing, got class="${state.pairClass}"`);
+
+    // Seed the match, then reload matches/trajectories the same way M-09 does
+    const fs = await import('node:fs/promises');
+    await fs.mkdir(TRAJ_MATCH_DIR, { recursive: true });
+    await fs.writeFile(path.join(TRAJ_MATCH_DIR, 'morph.sphere.ply'), 'PLY');
+    await fs.writeFile(path.join(TRAJ_MATCH_DIR, 'surf.0.ply'), 'PLY');
+
+    await page.evaluate(() => window.app.goStep(1));
+    await new Promise(r => setTimeout(r, 200));
+    await page.evaluate(() => window.app.goStep(5));
+    await new Promise(r => setTimeout(r, 800));
+
+    state = await page.evaluate(() => {
+        const runBtn = [...document.querySelectorAll('button')]
+            .find(b => b.textContent.trim() === 'Run Trajectory');
+        const pairRow = document.querySelector('.traj-pair-row .traj-pair-name');
+        return { disabled: runBtn?.disabled, pairClass: pairRow?.className };
+    });
+    assert.equal(state.disabled, false, 'Run Trajectory should be enabled once the pair match exists');
+    assert.ok(state.pairClass?.includes('traj-pair-ok'),
+        `Pair row should be marked ok, got class="${state.pairClass}"`);
+});
+
+test('T-E-04: loading an existing trajectory populates the player and the scrubber moves it', async () => {
+    const fs = await import('node:fs/promises');
+    const minimalPly = [
+        'ply', 'format ascii 1.0',
+        'element vertex 3', 'property float x', 'property float y', 'property float z',
+        'element face 1', 'property list uchar int vertex_indices',
+        'end_header',
+        '1 0 0', '0 1 0', '0 0 1',
+        '3 0 1 2',
+    ].join('\n');
+    const framesDir = path.join(TRAJ_DIR, 'trajectory');
+    await fs.mkdir(framesDir, { recursive: true });
+    await fs.writeFile(path.join(framesDir, '0.ply'), minimalPly);
+    await fs.writeFile(path.join(framesDir, '2.ply'), minimalPly);
+    await fs.writeFile(path.join(TRAJ_DIR, 'params.json'), JSON.stringify({
+        seq: ['F02_P0', 'F06_P4'], mode: 'raw',
+    }));
+
+    await page.evaluate(() => window.app.goStep(1));
+    await new Promise(r => setTimeout(r, 200));
+    await page.evaluate(() => window.app.goStep(5));
+    await new Promise(r => setTimeout(r, 800));
+
+    const rows = await page.$$('.match-roster-row');
+    let targetRow = null;
+    for (const row of rows) {
+        const name = await row.$eval('.match-roster-name', el => el.textContent);
+        if (name === 'e2e_test_traj') { targetRow = row; break; }
+    }
+    assert.ok(targetRow, 'e2e_test_traj roster row should be present');
+
+    const loadBtn = await targetRow.$('.roster-load-btn');
+    await loadBtn.click();
+    await waitForStatus(page, 'trajectory loaded', 15_000);
+    await new Promise(r => setTimeout(r, 300));
+
+    const scrubberExists = await page.$('#rp-traj-scrubber').then(el => !!el);
+    assert.ok(scrubberExists, '#rp-traj-scrubber should render once the trajectory is loaded');
+
+    const timeBefore = await page.$eval('#rp-traj-time', el => el.textContent);
+
+    await page.evaluate(() => {
+        const el = document.getElementById('rp-traj-scrubber');
+        el.value = '500';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await new Promise(r => setTimeout(r, 200));
+
+    const timeAfter = await page.$eval('#rp-traj-time', el => el.textContent);
+    assert.notEqual(timeAfter, timeBefore,
+        `Scrubbing should update the displayed time (before=${timeBefore}, after=${timeAfter})`);
+
+    // Cleanup
+    await fs.rm(TRAJ_MATCH_DIR, { recursive: true, force: true });
+    await fs.rm(TRAJ_DIR, { recursive: true, force: true });
+});

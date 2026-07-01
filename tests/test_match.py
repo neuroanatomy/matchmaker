@@ -4,6 +4,7 @@ Integration tests for /api/save_sphere, /api/match, and /api/project/subject end
 import json
 import os
 import time
+from pathlib import Path
 import pytest
 import igl
 import numpy as np
@@ -335,4 +336,264 @@ def test_remove_subject_no_project(client, tmp_path):
         "project_root": str(tmp_path / "no_such_project"),
         "subject_id":   "SubA",
     })
+    assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# GET /api/files
+# ---------------------------------------------------------------------------
+
+def test_api_files_lists_directory(client, tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "file.txt").write_text("hello")
+
+    resp = client.get("/api/files")
+    assert resp.status_code == 200
+    entries = resp.get_json()
+
+    by_name = {e["name"]: e for e in entries}
+    assert by_name["sub"]["is_dir"] is True
+    assert by_name["sub"]["size"] is None
+    assert by_name["file.txt"]["is_dir"] is False
+    assert by_name["file.txt"]["size"] == 5
+    assert by_name["file.txt"]["path"] == str(tmp_path / "file.txt")
+
+
+def test_api_files_rejects_non_directory(client, tmp_path):
+    f = tmp_path / "file.txt"
+    f.write_text("hello")
+    resp = client.get(f"/api/files?dir={f}")
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET /api/config
+# ---------------------------------------------------------------------------
+
+def test_api_config_returns_data_root(client, tmp_path):
+    resp = client.get("/api/config")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["data_root"] == str(tmp_path.resolve())
+
+
+# ---------------------------------------------------------------------------
+# GET /api/mesh_raw
+# ---------------------------------------------------------------------------
+
+def test_api_mesh_raw_returns_vertices_faces(client):
+    resp = client.get(f"/api/mesh_raw?path={F02_PLY}")
+    assert resp.status_code == 200
+    body = resp.get_json()
+
+    V, F = igl.read_triangle_mesh(F02_PLY)
+    assert len(body["vertices"]) == V.shape[0]
+    assert len(body["faces"]) == F.shape[0]
+    assert len(body["vertices"][0]) == 3
+    assert len(body["faces"][0]) == 3
+
+
+def test_api_mesh_raw_rejects_non_ply(client, tmp_path):
+    bad = tmp_path / "notes.txt"
+    bad.write_text("hi")
+    resp = client.get(f"/api/mesh_raw?path={bad}")
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET /api/companions
+# ---------------------------------------------------------------------------
+
+def test_api_companions_finds_sibling_files(client):
+    resp = client.get(
+        f"/api/companions?path={F02_PLY}&project_root={PROJ}&subject_id=F02_P0"
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["sphere"] == f"{F02_ANN}/sphere.ply"
+    assert body["sulc"] == f"{F02_ANN}/sulc.txt.gz"
+    assert body["curv"] == f"{F02_ANN}/curv.txt.gz"
+    assert body["sulci_json"] == f"{F02_ANN}/sulci.json"
+    assert body["rotation_txt"] == f"{F02_ANN}/rotation.txt"
+
+
+def test_api_companions_missing_returns_none(client, tmp_path):
+    lone_ply = tmp_path / "lone.ply"
+    lone_ply.write_bytes(b"PLY")
+    resp = client.get(f"/api/companions?path={lone_ply}")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["sphere"] is None
+    assert body["sulci_json"] is None
+
+
+# ---------------------------------------------------------------------------
+# GET /api/scalar
+# ---------------------------------------------------------------------------
+
+def test_api_scalar_returns_float_list(client):
+    import gzip as _gzip
+    sulc_path = f"{F02_ANN}/sulc.txt.gz"
+    with _gzip.open(sulc_path, "rt") as f:
+        lines = f.read().strip().splitlines()
+    expected_len = len(lines) - 1  # first line is a "nVertices 1 3" header
+
+    resp = client.get(f"/api/scalar?path={sulc_path}")
+    assert resp.status_code == 200
+    values = resp.get_json()
+    assert len(values) == expected_len
+    assert all(isinstance(v, float) for v in values)
+
+
+def test_api_scalar_rejects_wrong_extension(client, tmp_path):
+    bad = tmp_path / "data.json"
+    bad.write_text("{}")
+    resp = client.get(f"/api/scalar?path={bad}")
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET /api/project
+# ---------------------------------------------------------------------------
+
+def test_get_project_returns_json(client, tmp_path):
+    verts, faces = _icosphere()
+    sphere_path = str(tmp_path / "ico.ply")
+    client.post("/api/save_sphere", json={"path": sphere_path, "vertices": verts, "faces": faces})
+
+    project_root = str(tmp_path / "proj_get")
+    r = client.post("/api/project/create", json={
+        "root_dir":        project_root,
+        "ref_id":          "SubA",
+        "ref_source_path": sphere_path,
+    })
+    assert r.status_code == 200
+
+    resp = client.get(f"/api/project?root={project_root}")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["subjects"] == ["SubA"]
+    assert "created" in body
+    assert body["version"] == "1.0"
+
+
+def test_get_project_missing_returns_404(client, tmp_path):
+    resp = client.get(f"/api/project?root={tmp_path / 'no_such_project'}")
+    assert resp.status_code == 404
+
+
+def test_get_project_no_root_returns_400(client):
+    resp = client.get("/api/project")
+    assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /api/project/add_subject
+#
+# add_subject() previously had zero test coverage anywhere in the repo
+# (verified by grep across tests/*.py and tests/*.js). This is a prerequisite
+# for docs/29 Phase 2b, which de-duplicates its mesh-copy logic against
+# create_project()'s — refactoring it without a regression test would be
+# unsafe.
+# ---------------------------------------------------------------------------
+
+def test_add_subject_endpoint(client, tmp_path):
+    verts, faces = _icosphere()
+    sphere_path = str(tmp_path / "ico.ply")
+    client.post("/api/save_sphere", json={"path": sphere_path, "vertices": verts, "faces": faces})
+
+    project_root = str(tmp_path / "proj_add")
+    r = client.post("/api/project/create", json={
+        "root_dir":        project_root,
+        "ref_id":          "SubA",
+        "ref_source_path": sphere_path,
+    })
+    assert r.status_code == 200
+
+    r2 = client.post("/api/project/add_subject", json={
+        "project_root": project_root,
+        "subject_id":   "SubB",
+        "source_path":  sphere_path,
+    })
+    assert r2.status_code == 200
+    body = r2.get_json()
+    assert body["subject_id"] == "SubB"
+    assert body["project_root"] == project_root
+
+    mesh_b   = os.path.join(project_root, "data", "raw", "meshes", "SubB", "mesh.ply")
+    origin_b = os.path.join(project_root, "data", "raw", "meshes", "SubB", "origin.json")
+    ann_b    = os.path.join(project_root, "data", "derived", "annotations", "SubB")
+    assert os.path.exists(mesh_b)
+    assert os.path.exists(origin_b)
+    assert os.path.isdir(ann_b)
+
+    origin = json.loads(open(origin_b).read())
+    assert origin["source_path"] == str(Path(sphere_path).resolve())
+    assert "timestamp" in origin
+
+    project = json.loads(open(os.path.join(project_root, "project.json")).read())
+    assert "SubA" in project["subjects"]
+    assert "SubB" in project["subjects"]
+
+    # Re-reading the mesh must succeed (proves the copy is a valid PLY)
+    V, F = igl.read_triangle_mesh(mesh_b)
+    assert V.shape == (12, 3)
+
+
+def test_add_subject_missing_project(client, tmp_path):
+    verts, faces = _icosphere()
+    sphere_path = str(tmp_path / "ico.ply")
+    client.post("/api/save_sphere", json={"path": sphere_path, "vertices": verts, "faces": faces})
+
+    r = client.post("/api/project/add_subject", json={
+        "project_root": str(tmp_path / "no_such_project"),
+        "subject_id":   "SubX",
+        "source_path":  sphere_path,
+    })
+    assert r.status_code == 404
+
+
+def test_add_subject_missing_required_fields(client, tmp_path):
+    r = client.post("/api/project/add_subject", json={
+        "project_root": str(tmp_path),
+    })
+    assert r.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# GET / PUT /api/file
+# ---------------------------------------------------------------------------
+
+def test_api_file_get_and_put_roundtrip(client, tmp_path):
+    path = str(tmp_path / "sulci.json")
+    content = json.dumps({"hello": "world"})
+
+    r = client.put("/api/file", json={"path": path, "content": content})
+    assert r.status_code == 200
+    assert r.get_json() == {"ok": True}
+
+    r2 = client.get(f"/api/file?path={path}")
+    assert r2.status_code == 200
+    assert r2.get_json() == {"hello": "world"}
+
+
+def test_api_file_txt_roundtrip(client, tmp_path):
+    path = str(tmp_path / "rotation.txt")
+    r = client.put("/api/file", json={"path": path, "content": "1 0 0\n0 1 0\n0 0 1\n"})
+    assert r.status_code == 200
+
+    r2 = client.get(f"/api/file?path={path}")
+    assert r2.status_code == 200
+    assert r2.get_json() == {"content": "1 0 0\n0 1 0\n0 0 1\n"}
+
+
+def test_api_file_rejects_non_json_txt_extension(client, tmp_path):
+    path = str(tmp_path / "mesh.ply")
+    r = client.put("/api/file", json={"path": path, "content": "data"})
+    assert r.status_code == 400
+
+
+def test_api_file_get_missing_returns_404(client, tmp_path):
+    path = str(tmp_path / "does_not_exist.json")
+    r = client.get(f"/api/file?path={path}")
     assert r.status_code == 404
