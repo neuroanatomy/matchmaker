@@ -1,4 +1,5 @@
 import { el, setStatus, preItem } from './dom-helpers.js';
+import { state } from './state.js';
 import { Viewer3D } from './components/viewer3d.js';
 import { FileBrowser } from './components/filebrowser.js';
 import { TrajectoryPlayer } from './components/trajectory.js';
@@ -10,63 +11,6 @@ import { ProjectModal, AddSubjectModal } from './components/projectmodal.js';
 import { resampleMesh, parseRotMat, rotateVertsVR } from './components/morph.js';
 
 window.app = (() => {
-    let viewer = null;
-    let player = null;
-    let dataRoot = '';
-
-    // ── Subject roster ────────────────────────────────────────────────────────
-    let subjects     = {};   // { [id]: { id, path, sphere, sulc, curv, sulci, rot } }
-    let subjectOrder = [];   // IDs in insertion order
-    let activeSubjectId = null;  // selected in Load / Preprocess / Align
-    let viewedSubjectId = null;  // whose mesh is in the 3D viewer
-
-    // viewState keyed by subject ID
-    const viewState = {};    // { [id]: { meshType: null|'native'|'sphere', texType: null|'sulc'|'curv' } }
-
-    // ── Project state ─────────────────────────────────────────────────────────
-    let projectRoot = null;
-
-    // ── Match step ────────────────────────────────────────────────────────────
-    let existingMatches = [];   // [{name, dir, mov_id, ref_id, has_morph, has_match, params}]
-    let matchRefId      = null;
-    let matchMovId      = null;
-    let matchOutDir     = null;
-    let morphResult     = null;
-    let matchResult     = null;
-    let matchK          = 100;
-    let matchNsteps     = 1;
-    let matchWSmooth    = 1.0;
-    let matchWDeform    = 10.0;
-    let matchWProject   = 1.0;
-    let matchViewMode   = 'morph';
-    let matchViewOpacity = 0.6;
-    let morphSphereData = null;
-    let morphSurface    = null;
-    let matchSurface    = null;
-    let morphInterpT    = 0;
-
-    // ── View / Trajectory step ────────────────────────────────────────────────
-    let existingTrajectories = [];   // [{name, dir, n_frames, done, params}]
-    let trajSeq              = [];   // ordered subject IDs oldest→youngest for new trajectory
-    let trajMode             = 'raw';
-    let trajNDeformSmooth    = 5;
-    let trajDoIcp            = false;
-    let trajNTrajSmooth      = 1;
-    let trajNSpatialSmooth   = 1;
-    let trajLambdaSpatial    = 0.005;
-    let loadedTrajDir        = null; // which trajectory is currently in the player
-
-    // ── Align step ────────────────────────────────────────────────────────────
-    let alignSubjectId        = null;
-    let alignInMemory         = {};   // { [id]: overlayJSON }
-    let alignStereoView       = null;
-    let alignOverlay          = null;
-    let alignViewMode         = 'flat';
-    let alignWireframe        = false;
-    let alignHas3DOrientation = false;
-
-    let currentStep = 1;
-
     // ── Quick-load datasets ──────────────────────────────────────────────────
     const DATASETS = [
         { label: 'F02_P0', rel: 'data/external/project/data/raw/meshes/F02_P0/mesh.ply' },
@@ -78,16 +22,16 @@ window.app = (() => {
 
     // ── Init ─────────────────────────────────────────────────────────────────
     async function init() {
-        viewer = new Viewer3D(document.getElementById('viewer-container'));
-        window._viewer = viewer;
+        state.viewer = new Viewer3D(document.getElementById('viewer-container'));
+        window._viewer = state.viewer;
 
         document.getElementById('edges-cb')
-            ?.addEventListener('change', e => viewer.setEdges(e.target.checked));
+            ?.addEventListener('change', e => state.viewer.setEdges(e.target.checked));
 
         _startHealthPolling();
 
         const cfg = await getConfig();
-        if (cfg) dataRoot = cfg.data_root;
+        if (cfg) state.dataRoot = cfg.data_root;
 
         renderStep(1);
         _activateStep(1);
@@ -113,39 +57,39 @@ window.app = (() => {
 
     // ── Step management ──────────────────────────────────────────────────────
     function goStep(n) {
-        const prev = currentStep;
+        const prev = state.currentStep;
         if (prev === 3 && n !== 3) {
-            if (alignOverlay && alignSubjectId) {
-                alignInMemory[alignSubjectId] = alignOverlay.toJSON();
-                alignOverlay.destroy();
-                alignOverlay = null;
+            if (state.alignOverlay && state.alignSubjectId) {
+                state.alignInMemory[state.alignSubjectId] = state.alignOverlay.toJSON();
+                state.alignOverlay.destroy();
+                state.alignOverlay = null;
             }
-            if (alignStereoView) { alignStereoView.destroy(); alignStereoView = null; }
-            if (alignViewMode === '3d') viewer.clearAll();
-            alignViewMode         = 'flat';
-            alignWireframe        = false;
-            alignHas3DOrientation = false;
+            if (state.alignStereoView) { state.alignStereoView.destroy(); state.alignStereoView = null; }
+            if (state.alignViewMode === '3d') state.viewer.clearAll();
+            state.alignViewMode         = 'flat';
+            state.alignWireframe        = false;
+            state.alignHas3DOrientation = false;
         }
         if (prev === 4 && n !== 4) {
-            viewer.clearAll();
+            state.viewer.clearAll();
         }
         if (prev === 5 && n !== 5) {
-            player?.pause();
-            viewer.clearAll();
+            state.player?.pause();
+            state.viewer.clearAll();
         }
-        currentStep = n;
+        state.currentStep = n;
         _activateStep(n);
         renderStep(n);
         if (n === 4 && prev !== 4) {
             _refreshMatchViewer();
         }
         if (n === 5 && prev !== 5) {
-            viewer.clearAll();
-            if (player?.isLoaded) {
-                player.reattach(viewer);
+            state.viewer.clearAll();
+            if (state.player?.isLoaded) {
+                state.player.reattach(state.viewer);
             }
         }
-        if (prev === 4 && (n === 1 || n === 2) && viewedSubjectId && viewState[viewedSubjectId]?.meshType) {
+        if (prev === 4 && (n === 1 || n === 2) && state.viewedSubjectId && state.viewState[state.viewedSubjectId]?.meshType) {
             _refreshViewer({ preserveOrientation: false });
         }
     }
@@ -188,11 +132,11 @@ window.app = (() => {
         container.innerHTML = '';
 
         // Subject roster
-        if (subjectOrder.length > 0) {
+        if (state.subjectOrder.length > 0) {
             const roster = el('div', { className: 'subject-roster' });
-            subjectOrder.forEach(id => {
-                const s   = subjects[id];
-                const row = el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
+            state.subjectOrder.forEach(id => {
+                const s   = state.subjects[id];
+                const row = el('div', { className: `subject-row${id === state.activeSubjectId ? ' active' : ''}` });
                 row.dataset.subjectId = id;
 
                 const info = el('div', { className: 'subject-row-info' });
@@ -225,11 +169,11 @@ window.app = (() => {
                 row.appendChild(rmBtn);
 
                 row.onclick = async () => {
-                    activeSubjectId = id;
-                    if (viewedSubjectId !== id) {
-                        viewedSubjectId = id;
-                        if (!viewState[id]) viewState[id] = { meshType: 'native', texType: null };
-                        else if (!viewState[id].meshType) viewState[id].meshType = 'native';
+                    state.activeSubjectId = id;
+                    if (state.viewedSubjectId !== id) {
+                        state.viewedSubjectId = id;
+                        if (!state.viewState[id]) state.viewState[id] = { meshType: 'native', texType: null };
+                        else if (!state.viewState[id].meshType) state.viewState[id].meshType = 'native';
                         await _refreshViewer({ preserveOrientation: true });
                     }
                     _renderLoadPanel(container);
@@ -241,11 +185,11 @@ window.app = (() => {
         }
 
         // View controls for active subject
-        if (activeSubjectId && subjects[activeSubjectId]) {
-            const id  = activeSubjectId;
-            const s   = subjects[id];
-            const vs  = viewState[id] || (viewState[id] = { meshType: null, texType: null });
-            const isView = viewedSubjectId === id;
+        if (state.activeSubjectId && state.subjects[state.activeSubjectId]) {
+            const id  = state.activeSubjectId;
+            const s   = state.subjects[id];
+            const vs  = state.viewState[id] || (state.viewState[id] = { meshType: null, texType: null });
+            const isView = state.viewedSubjectId === id;
 
             const viewSec = el('div', { className: 'view-section' });
 
@@ -297,7 +241,7 @@ window.app = (() => {
         DATASETS.forEach(ds => {
             const btn = el('button', { className: 'pill-btn' });
             btn.textContent = ds.label;
-            btn.onclick = () => _loadSubject(dataRoot + '/' + ds.rel);
+            btn.onclick = () => _loadSubject(state.dataRoot + '/' + ds.rel);
             pills.appendChild(btn);
         });
         container.appendChild(pills);
@@ -321,7 +265,7 @@ window.app = (() => {
                 addBtn.textContent = path.endsWith('/project.json') ? 'Open project' : '+ Add mesh';
             },
         });
-        fb.navigate(dataRoot || null);
+        fb.navigate(state.dataRoot || null);
 
         addBtn.onclick = () => _addMeshFromBrowser(addBtn.dataset.path);
         container.appendChild(addBtn);
@@ -339,21 +283,21 @@ window.app = (() => {
         yesBtn.onclick = async e => {
             e.stopPropagation();
             try {
-                if (projectRoot) await deleteSubject({ project_root: projectRoot, subject_id: id });
+                if (state.projectRoot) await deleteSubject({ project_root: state.projectRoot, subject_id: id });
             } catch { /* still remove from local state */ }
 
-            delete subjects[id];
-            delete viewState[id];
-            delete alignInMemory[id];
-            subjectOrder = subjectOrder.filter(s => s !== id);
-            if (activeSubjectId === id) activeSubjectId = subjectOrder[0] || null;
-            if (viewedSubjectId === id) { viewedSubjectId = null; viewer.clearAll(); }
-            if (alignSubjectId  === id) alignSubjectId = null;
-            if (matchRefId      === id) { matchRefId = null; matchOutDir = null; morphResult = null; matchResult = null; morphSurface = null; matchSurface = null; }
-            if (matchMovId      === id) { matchMovId = null; matchOutDir = null; morphResult = null; matchResult = null; morphSurface = null; matchSurface = null; }
+            delete state.subjects[id];
+            delete state.viewState[id];
+            delete state.alignInMemory[id];
+            state.subjectOrder = state.subjectOrder.filter(s => s !== id);
+            if (state.activeSubjectId === id) state.activeSubjectId = state.subjectOrder[0] || null;
+            if (state.viewedSubjectId === id) { state.viewedSubjectId = null; state.viewer.clearAll(); }
+            if (state.alignSubjectId  === id) state.alignSubjectId = null;
+            if (state.matchRefId      === id) { state.matchRefId = null; state.matchOutDir = null; state.morphResult = null; state.matchResult = null; state.morphSurface = null; state.matchSurface = null; }
+            if (state.matchMovId      === id) { state.matchMovId = null; state.matchOutDir = null; state.morphResult = null; state.matchResult = null; state.morphSurface = null; state.matchSurface = null; }
 
             const c = document.getElementById('rpanel-content');
-            if (c) renderStep(currentStep);
+            if (c) renderStep(state.currentStep);
             setStatus(`Removed ${id}`);
         };
         confirmEl.appendChild(yesBtn);
@@ -375,39 +319,39 @@ window.app = (() => {
             let id = null;
             const projMatch = absPath.match(/^(.+)\/data\/raw\/meshes\/([^/]+)\/mesh\.ply$/);
             if (projMatch) {
-                if (!projectRoot) projectRoot = projMatch[1];
+                if (!state.projectRoot) state.projectRoot = projMatch[1];
                 id = projMatch[2];
             } else {
                 id = _guessSubjectId(absPath);
             }
 
             // Ensure unique ID if collision
-            if (subjects[id] && subjects[id].path !== absPath) {
+            if (state.subjects[id] && state.subjects[id].path !== absPath) {
                 let n = 2;
-                while (subjects[`${id}_${n}`]) n++;
+                while (state.subjects[`${id}_${n}`]) n++;
                 id = `${id}_${n}`;
             }
 
-            if (!subjects[id]) {
-                subjects[id] = { id, path: absPath, sphere: null, sulc: null, curv: null, sulci: null, rot: null };
-                subjectOrder.push(id);
+            if (!state.subjects[id]) {
+                state.subjects[id] = { id, path: absPath, sphere: null, sulc: null, curv: null, sulci: null, rot: null };
+                state.subjectOrder.push(id);
             } else {
-                subjects[id].path = absPath;
+                state.subjects[id].path = absPath;
             }
 
-            viewState[id] = { meshType: 'native', texType: null };
-            activeSubjectId = id;
-            viewedSubjectId = id;
+            state.viewState[id] = { meshType: 'native', texType: null };
+            state.activeSubjectId = id;
+            state.viewedSubjectId = id;
 
             // Auto-discover companion files
             const compParams = { path: absPath, subject_id: id };
-            if (projectRoot) compParams.project_root = projectRoot;
+            if (state.projectRoot) compParams.project_root = state.projectRoot;
             const comp = await apiGet('/api/companions', compParams).catch(() => ({}));
-            subjects[id].sphere = comp.sphere        || null;
-            subjects[id].sulc   = comp.sulc          || null;
-            subjects[id].curv   = comp.curv          || null;
-            subjects[id].sulci  = comp.sulci_json    || null;
-            subjects[id].rot    = comp.rotation_txt  || null;
+            state.subjects[id].sphere = comp.sphere        || null;
+            state.subjects[id].sulc   = comp.sulc          || null;
+            state.subjects[id].curv   = comp.curv          || null;
+            state.subjects[id].sulci  = comp.sulci_json    || null;
+            state.subjects[id].rot    = comp.rotation_txt  || null;
 
             await _refreshViewer({ preserveOrientation: false });
 
@@ -419,11 +363,11 @@ window.app = (() => {
             if (comp.rotation_txt) found.push('rotation');
             setStatus(`${name} loaded${found.length ? ' — ' + found.join(', ') + ' available' : ''}`);
 
-            if (currentStep === 1) {
+            if (state.currentStep === 1) {
                 const c = document.getElementById('rpanel-content');
                 if (c) _renderLoadPanel(c);
             } else {
-                renderStep(currentStep);
+                renderStep(state.currentStep);
             }
         } catch (e) {
             setStatus(`Load error: ${e.message}`);
@@ -435,7 +379,7 @@ window.app = (() => {
         setStatus('Loading project…');
         try {
             const proj = await getProject(root);
-            projectRoot = root;
+            state.projectRoot = root;
             const ids = proj.subjects || [];
             if (ids.length === 0) { setStatus('Project has no subjects'); return; }
             for (const subjectId of ids) {
@@ -463,7 +407,7 @@ window.app = (() => {
             return;
         }
 
-        if (!projectRoot) {
+        if (!state.projectRoot) {
             // No project yet — show create dialog
             await new Promise(resolve => {
                 new ProjectModal(document.body, {
@@ -472,7 +416,7 @@ window.app = (() => {
                         try {
                             setStatus('Creating project…');
                             await createProject({ root_dir: root, ref_id: subjectId, ref_source_path: path });
-                            projectRoot = root;
+                            state.projectRoot = root;
                             await _loadSubject(`${root}/data/raw/meshes/${subjectId}/mesh.ply`);
                             setStatus('Project created');
                         } catch (e) {
@@ -489,12 +433,12 @@ window.app = (() => {
                 new AddSubjectModal(document.body, {
                     slot: 'ref',
                     meshPath: path,
-                    projectRoot,
+                    projectRoot: state.projectRoot,
                     onConfirm: async ({ subjectId }) => {
                         try {
                             setStatus(`Adding ${subjectId} to project…`);
-                            await addSubject({ project_root: projectRoot, subject_id: subjectId, source_path: path });
-                            await _loadSubject(`${projectRoot}/data/raw/meshes/${subjectId}/mesh.ply`);
+                            await addSubject({ project_root: state.projectRoot, subject_id: subjectId, source_path: path });
+                            await _loadSubject(`${state.projectRoot}/data/raw/meshes/${subjectId}/mesh.ply`);
                         } catch (e) {
                             setStatus(`Failed to add subject: ${e.message}`);
                         }
@@ -520,7 +464,7 @@ window.app = (() => {
     }
 
     function _annotationsDir(id) {
-        return `${projectRoot}/data/derived/annotations/${id}`;
+        return `${state.projectRoot}/data/derived/annotations/${id}`;
     }
 
     // ── Public shortcut used by E2E tests ────────────────────────────────────
@@ -532,7 +476,7 @@ window.app = (() => {
     function _renderPreprocessPanel(container) {
         container.innerHTML = '';
 
-        if (subjectOrder.length === 0) {
+        if (state.subjectOrder.length === 0) {
             const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'No meshes loaded — go to Load (step 1) first.';
             container.appendChild(msg);
@@ -541,9 +485,9 @@ window.app = (() => {
 
         // Subject roster with inline status chips
         const roster = el('div', { className: 'subject-roster' });
-        subjectOrder.forEach(id => {
-            const s   = subjects[id];
-            const row = el('div', { className: `subject-row${id === activeSubjectId ? ' active' : ''}` });
+        state.subjectOrder.forEach(id => {
+            const s   = state.subjects[id];
+            const row = el('div', { className: `subject-row${id === state.activeSubjectId ? ' active' : ''}` });
             row.dataset.subjectId = id;
 
             const info = el('div', { className: 'subject-row-info' });
@@ -563,7 +507,7 @@ window.app = (() => {
 
             row.appendChild(info);
             row.onclick = () => {
-                activeSubjectId = id;
+                state.activeSubjectId = id;
                 _renderPreprocessPanel(container);
             };
             roster.appendChild(row);
@@ -572,10 +516,10 @@ window.app = (() => {
         container.appendChild(el('div', { className: 'sph-divider' }));
 
         // Detail section for active subject
-        if (!activeSubjectId || !subjects[activeSubjectId]) return;
+        if (!state.activeSubjectId || !state.subjects[state.activeSubjectId]) return;
 
-        const id  = activeSubjectId;
-        const s   = subjects[id];
+        const id  = state.activeSubjectId;
+        const s   = state.subjects[id];
 
         const section = el('div', { className: 'sph-section' });
 
@@ -617,27 +561,27 @@ window.app = (() => {
     }
 
     async function _viewMesh(id, meshType) {
-        if (viewedSubjectId === id && viewState[id]?.meshType === meshType) return;
-        viewedSubjectId = id;
-        if (!viewState[id]) viewState[id] = { meshType: null, texType: null };
-        viewState[id].meshType = meshType;
+        if (state.viewedSubjectId === id && state.viewState[id]?.meshType === meshType) return;
+        state.viewedSubjectId = id;
+        if (!state.viewState[id]) state.viewState[id] = { meshType: null, texType: null };
+        state.viewState[id].meshType = meshType;
         await _refreshViewer();
-        renderStep(currentStep);
+        renderStep(state.currentStep);
     }
 
     async function _toggleTexture(id, texType) {
-        if (!viewState[id]) viewState[id] = { meshType: 'native', texType: null };
-        viewState[id].texType = viewState[id].texType === texType ? null : texType;
-        if (viewedSubjectId === id) await _refreshViewer({ preserveOrientation: true });
-        renderStep(currentStep);
+        if (!state.viewState[id]) state.viewState[id] = { meshType: 'native', texType: null };
+        state.viewState[id].texType = state.viewState[id].texType === texType ? null : texType;
+        if (state.viewedSubjectId === id) await _refreshViewer({ preserveOrientation: true });
+        renderStep(state.currentStep);
     }
 
     async function _refreshViewer({ preserveOrientation = false } = {}) {
-        if (!viewedSubjectId || !viewState[viewedSubjectId]?.meshType) return;
-        const id      = viewedSubjectId;
-        const s       = subjects[id];
+        if (!state.viewedSubjectId || !state.viewState[state.viewedSubjectId]?.meshType) return;
+        const id      = state.viewedSubjectId;
+        const s       = state.subjects[id];
         if (!s) return;
-        const vs      = viewState[id];
+        const vs      = state.viewState[id];
         const meshPath = vs.meshType === 'sphere' ? s.sphere : s.path;
         if (!meshPath) return;
 
@@ -647,21 +591,21 @@ window.app = (() => {
             if (scalarPath) {
                 try {
                     const scalars = await apiGet('/api/scalar', { path: scalarPath });
-                    await viewer.loadMeshColored(meshUrl(meshPath), scalars, { preserveOrientation });
+                    await state.viewer.loadMeshColored(meshUrl(meshPath), scalars, { preserveOrientation });
                     setStatus(`${meshPath.split('/').pop()} — ${texType === 'sulc' ? 'sulcal depth' : 'curvature'}`);
                 } catch (e) { setStatus(`Error: ${e.message}`); }
                 return;
             }
         }
-        await viewer.loadMesh(meshUrl(meshPath), { preserveOrientation });
+        await state.viewer.loadMesh(meshUrl(meshPath), { preserveOrientation });
         setStatus(meshPath.split('/').pop());
     }
 
     async function _spherize(id, fillEl, btn) {
         btn.disabled = true;
-        const s    = subjects[id];
+        const s    = state.subjects[id];
         const body = { path: s.path };
-        if (projectRoot) body.out_dir = _annotationsDir(id);
+        if (state.projectRoot) body.out_dir = _annotationsDir(id);
         fillEl.parentElement.style.display = 'block';
         setStatus(`Spherizing ${s.path.split('/').pop()}…`);
         try {
@@ -669,9 +613,9 @@ window.app = (() => {
             const result = await pollJob(job_id, {
                 onProgress: p => { fillEl.style.width = `${Math.round(p * 100)}%`; },
             });
-            subjects[id].sphere = result.sphere_path;
+            state.subjects[id].sphere = result.sphere_path;
             setStatus(`Sphere ready: ${result.sphere_path.split('/').pop()}`);
-            renderStep(currentStep);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Spherize error: ${e.message}`);
             btn.disabled = false;
@@ -680,9 +624,9 @@ window.app = (() => {
 
     async function _computeCurvature(id, fillEl, btn) {
         btn.disabled = true;
-        const s    = subjects[id];
+        const s    = state.subjects[id];
         const body = { path: s.path };
-        if (projectRoot) body.out_dir = _annotationsDir(id);
+        if (state.projectRoot) body.out_dir = _annotationsDir(id);
         fillEl.parentElement.style.display = 'block';
         setStatus(`Computing maps for ${s.path.split('/').pop()}…`);
         try {
@@ -690,10 +634,10 @@ window.app = (() => {
             const result = await pollJob(job_id, {
                 onProgress: p => { fillEl.style.width = `${Math.round(p * 100)}%`; },
             });
-            subjects[id].curv = result.curv_path;
-            subjects[id].sulc = result.sulc_path;
+            state.subjects[id].curv = result.curv_path;
+            state.subjects[id].sulc = result.sulc_path;
             setStatus(`Maps ready: ${result.sulc_path.split('/').pop()}`);
-            renderStep(currentStep);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Maps error: ${e.message}`);
             btn.disabled = false;
@@ -703,29 +647,29 @@ window.app = (() => {
     // ── Step 3 — Align ───────────────────────────────────────────────────────
 
     async function _activateAlign(id) {
-        const prevId = alignSubjectId;
-        alignSubjectId        = id;
-        alignHas3DOrientation = false;
-        if (currentStep !== 3) return;
+        const prevId = state.alignSubjectId;
+        state.alignSubjectId        = id;
+        state.alignHas3DOrientation = false;
+        if (state.currentStep !== 3) return;
 
-        if (id === prevId && alignOverlay && alignStereoView) return;
+        if (id === prevId && state.alignOverlay && state.alignStereoView) return;
 
-        viewer.clearAll();
+        state.viewer.clearAll();
 
-        const targetMode = alignViewMode;
-        if (alignViewMode === '3d') alignViewMode = 'flat';
+        const targetMode = state.alignViewMode;
+        if (state.alignViewMode === '3d') state.alignViewMode = 'flat';
 
-        if (alignOverlay) {
-            if (prevId) alignInMemory[prevId] = alignOverlay.toJSON();
-            alignOverlay.destroy();
-            alignOverlay = null;
+        if (state.alignOverlay) {
+            if (prevId) state.alignInMemory[prevId] = state.alignOverlay.toJSON();
+            state.alignOverlay.destroy();
+            state.alignOverlay = null;
         }
-        if (alignStereoView) { alignStereoView.destroy(); alignStereoView = null; }
+        if (state.alignStereoView) { state.alignStereoView.destroy(); state.alignStereoView = null; }
 
-        const s = subjects[id];
+        const s = state.subjects[id];
         if (!s?.sphere) {
             setStatus(`No sphere for ${id} — run Preprocess first`);
-            renderStep(currentStep);
+            renderStep(state.currentStep);
             return;
         }
 
@@ -743,21 +687,21 @@ window.app = (() => {
                 } catch { /* malformed rotation.txt */ }
             }
         }
-        if (currentStep !== 3) return;
+        if (state.currentStep !== 3) return;
 
         setStatus('Loading sphere…');
         try {
             const scalars = s.sulc ? await apiGet('/api/scalar', { path: s.sulc }) : null;
-            if (currentStep !== 3) return;
+            if (state.currentStep !== 3) return;
 
             const container = document.getElementById('viewer-container');
-            alignStereoView = new StereoView(container);
-            window._alignStereoView = alignStereoView;
-            await alignStereoView.load(s.sphere, scalars, initR);
-            if (currentStep !== 3) { alignStereoView.destroy(); alignStereoView = null; return; }
+            state.alignStereoView = new StereoView(container);
+            window._alignStereoView = state.alignStereoView;
+            await state.alignStereoView.load(s.sphere, scalars, initR);
+            if (state.currentStep !== 3) { state.alignStereoView.destroy(); state.alignStereoView = null; return; }
 
-            alignStereoView.onRotationChange(() => {
-                const { alpha, beta, gamma } = alignStereoView.getEulerZYX();
+            state.alignStereoView.onRotationChange(() => {
+                const { alpha, beta, gamma } = state.alignStereoView.getEulerZYX();
                 const update = (domId, val) => {
                     const el = document.getElementById(domId);
                     if (!el) return;
@@ -771,22 +715,22 @@ window.app = (() => {
                 update('rot-tilth', gamma);
             });
 
-            alignOverlay = new StereographicOverlay(container, alignStereoView);
+            state.alignOverlay = new StereographicOverlay(container, state.alignStereoView);
 
-            alignOverlay.onChange = () => {
-                if (alignSubjectId) alignInMemory[alignSubjectId] = alignOverlay.toJSON();
+            state.alignOverlay.onChange = () => {
+                if (state.alignSubjectId) state.alignInMemory[state.alignSubjectId] = state.alignOverlay.toJSON();
             };
 
-            const inMem     = alignInMemory[id];
+            const inMem     = state.alignInMemory[id];
             const sulciPath = s.sulci;
             if (inMem) {
-                alignOverlay.fromJSON(inMem);
-                setStatus(`Stereo view ready — ${alignOverlay.regions.length} landmarks restored`);
+                state.alignOverlay.fromJSON(inMem);
+                setStatus(`Stereo view ready — ${state.alignOverlay.regions.length} landmarks restored`);
             } else if (sulciPath) {
                 try {
                     const data = await apiGet('/api/file', { path: sulciPath });
-                    alignOverlay.fromJSON(data);
-                    setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
+                    state.alignOverlay.fromJSON(data);
+                    setStatus(`Loaded ${sulciPath.split('/').pop()} — ${state.alignOverlay.regions.length} landmarks`);
                 } catch { /* no prior sulci.json */ }
             }
 
@@ -796,20 +740,20 @@ window.app = (() => {
             return;
         }
 
-        if (currentStep !== 3) return;
-        renderStep(currentStep);
+        if (state.currentStep !== 3) return;
+        renderStep(state.currentStep);
 
         if (targetMode === '3d') await _switchViewMode('3d');
     }
 
     async function _switchViewMode(mode) {
-        if (alignViewMode === mode || !alignOverlay) return;
-        alignViewMode = mode;
-        renderStep(currentStep);
+        if (state.alignViewMode === mode || !state.alignOverlay) return;
+        state.alignViewMode = mode;
+        renderStep(state.currentStep);
         if (mode === '3d') {
-            alignStereoView._canvas.style.display = 'none';
-            alignOverlay._canvas.style.display    = 'none';
-            const s      = alignSubjectId ? subjects[alignSubjectId] : null;
+            state.alignStereoView._canvas.style.display = 'none';
+            state.alignOverlay._canvas.style.display    = 'none';
+            const s      = state.alignSubjectId ? state.subjects[state.alignSubjectId] : null;
             const native = s?.path;
             const scalar = s?.sulc || s?.curv;
             setStatus('Loading 3D view…');
@@ -817,23 +761,23 @@ window.app = (() => {
                 const scalars = scalar
                     ? await apiGet('/api/scalar', { path: scalar }).catch(() => null)
                     : null;
-                const preserveOrientation = alignHas3DOrientation;
+                const preserveOrientation = state.alignHas3DOrientation;
                 if (scalars) {
-                    await viewer.loadMeshColored(meshUrl(native), scalars, { preserveOrientation });
+                    await state.viewer.loadMeshColored(meshUrl(native), scalars, { preserveOrientation });
                 } else {
-                    await viewer.loadMesh(meshUrl(native), { preserveOrientation });
+                    await state.viewer.loadMesh(meshUrl(native), { preserveOrientation });
                 }
-                alignHas3DOrientation = true;
-                if (alignWireframe) viewer.setWireframe(true);
-                if (alignOverlay?.regions.length > 0) {
-                    const regions3d   = alignOverlay.getRegions3DSampled(10);
-                    const nativeVerts = viewer.getMainMeshVertexArray();
+                state.alignHas3DOrientation = true;
+                if (state.alignWireframe) state.viewer.setWireframe(true);
+                if (state.alignOverlay?.regions.length > 0) {
+                    const regions3d   = state.alignOverlay.getRegions3DSampled(10);
+                    const nativeVerts = state.viewer.getMainMeshVertexArray();
                     if (nativeVerts) {
-                        viewer.setLandmarkLinesOnMesh(
+                        state.viewer.setLandmarkLinesOnMesh(
                             regions3d,
-                            alignStereoView._rawVerts,
-                            alignStereoView._nBase,
-                            alignStereoView._tris,
+                            state.alignStereoView._rawVerts,
+                            state.alignStereoView._nBase,
+                            state.alignStereoView._tris,
                             nativeVerts,
                         );
                     }
@@ -843,28 +787,28 @@ window.app = (() => {
                 setStatus(`3D view error: ${e.message}`);
             }
         } else {
-            viewer.clearAll();
-            alignStereoView._canvas.style.display = '';
-            alignOverlay._canvas.style.display    = '';
-            alignStereoView._render();
+            state.viewer.clearAll();
+            state.alignStereoView._canvas.style.display = '';
+            state.alignOverlay._canvas.style.display    = '';
+            state.alignStereoView._render();
             setStatus('Flat stereo view');
         }
     }
 
     function _toggleWireframe() {
-        alignWireframe = !alignWireframe;
-        if (alignViewMode === 'flat') {
-            alignStereoView?.setWireframe(alignWireframe);
+        state.alignWireframe = !state.alignWireframe;
+        if (state.alignViewMode === 'flat') {
+            state.alignStereoView?.setWireframe(state.alignWireframe);
         } else {
-            viewer.setWireframe(alignWireframe);
+            state.viewer.setWireframe(state.alignWireframe);
         }
-        renderStep(currentStep);
+        renderStep(state.currentStep);
     }
 
     function _renderAlignPanel(container) {
         container.innerHTML = '';
 
-        if (subjectOrder.length === 0) {
+        if (state.subjectOrder.length === 0) {
             const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'No meshes loaded — go to Load (step 1) first.';
             container.appendChild(msg);
@@ -873,9 +817,9 @@ window.app = (() => {
 
         // Subject selector roster
         const roster = el('div', { className: 'subject-roster' });
-        subjectOrder.forEach(id => {
-            const s   = subjects[id];
-            const row = el('div', { className: `subject-row${id === alignSubjectId ? ' active' : ''}` });
+        state.subjectOrder.forEach(id => {
+            const s   = state.subjects[id];
+            const row = el('div', { className: `subject-row${id === state.alignSubjectId ? ' active' : ''}` });
             row.dataset.subjectId = id;
 
             const info = el('div', { className: 'subject-row-info' });
@@ -883,7 +827,7 @@ window.app = (() => {
             idEl.textContent = id;
             info.appendChild(idEl);
 
-            if (s.sulci || alignInMemory[id]?.length > 0) {
+            if (s.sulci || state.alignInMemory[id]?.length > 0) {
                 const badge = el('span', { className: 'sulci-badge' });
                 badge.textContent = '✓ landmarks';
                 info.appendChild(badge);
@@ -896,17 +840,17 @@ window.app = (() => {
         container.appendChild(roster);
         container.appendChild(el('div', { className: 'sph-divider' }));
 
-        if (!alignSubjectId) {
+        if (!state.alignSubjectId) {
             const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'Select a mesh above to start alignment.';
             container.appendChild(msg);
             // Auto-select first subject that has a sphere
-            const firstWithSphere = subjectOrder.find(id => subjects[id]?.sphere);
+            const firstWithSphere = state.subjectOrder.find(id => state.subjects[id]?.sphere);
             if (firstWithSphere) setTimeout(() => _activateAlign(firstWithSphere), 0);
             return;
         }
 
-        const sphere = subjects[alignSubjectId]?.sphere;
+        const sphere = state.subjects[state.alignSubjectId]?.sphere;
         if (!sphere) {
             const msg = el('p', { className: 'coming-soon' });
             msg.textContent = 'Preprocess this mesh first (step 2).';
@@ -922,8 +866,8 @@ window.app = (() => {
             { id: 'delpoint', label: '-Pt',    title: 'Delete point from curve' },
         ];
         const toolBar = el('div', { className: 'align-tools' });
-        const currentTool  = alignOverlay?.tool ?? 'draw';
-        const editDisabled = alignViewMode === '3d';
+        const currentTool  = state.alignOverlay?.tool ?? 'draw';
+        const editDisabled = state.alignViewMode === '3d';
         TOOLS.forEach(({ id, label, title }) => {
             const btn = el('button', { className: `tool-btn${currentTool === id ? ' active' : ''}` });
             btn.textContent = label;
@@ -931,9 +875,9 @@ window.app = (() => {
             btn.disabled    = editDisabled;
             if (editDisabled) btn.tabIndex = -1;
             btn.onclick = () => {
-                if (!alignOverlay || editDisabled) return;
-                alignOverlay.setTool(id);
-                renderStep(currentStep);
+                if (!state.alignOverlay || editDisabled) return;
+                state.alignOverlay.setTool(id);
+                renderStep(state.currentStep);
             };
             toolBar.appendChild(btn);
         });
@@ -945,10 +889,10 @@ window.app = (() => {
         rotBtn.disabled = editDisabled;
         if (editDisabled) rotBtn.tabIndex = -1;
         rotBtn.onclick = () => {
-            if (!alignOverlay || editDisabled) return;
-            const newTool = alignOverlay.tool === 'rotate' ? 'draw' : 'rotate';
-            alignOverlay.setTool(newTool);
-            renderStep(currentStep);
+            if (!state.alignOverlay || editDisabled) return;
+            const newTool = state.alignOverlay.tool === 'rotate' ? 'draw' : 'rotate';
+            state.alignOverlay.setTool(newTool);
+            renderStep(state.currentStep);
         };
         toolBar.appendChild(rotBtn);
         container.appendChild(toolBar);
@@ -962,41 +906,41 @@ window.app = (() => {
         viewLabel.textContent = 'VIEW';
         viewRow.appendChild(viewLabel);
 
-        const flatBtn = el('button', { className: `view-btn${alignViewMode === 'flat' ? ' active' : ''}` });
+        const flatBtn = el('button', { className: `view-btn${state.alignViewMode === 'flat' ? ' active' : ''}` });
         flatBtn.textContent = 'Flat';
         flatBtn.title = 'Flat disc — stereographic projection';
-        flatBtn.setAttribute('aria-pressed', String(alignViewMode === 'flat'));
+        flatBtn.setAttribute('aria-pressed', String(state.alignViewMode === 'flat'));
         flatBtn.setAttribute('aria-label', 'Flat projection');
-        if (!alignOverlay) { flatBtn.disabled = true; flatBtn.tabIndex = -1; }
+        if (!state.alignOverlay) { flatBtn.disabled = true; flatBtn.tabIndex = -1; }
         flatBtn.onclick = () => _switchViewMode('flat');
         viewRow.appendChild(flatBtn);
 
-        const btn3d = el('button', { className: `view-btn${alignViewMode === '3d' ? ' active' : ''}` });
+        const btn3d = el('button', { className: `view-btn${state.alignViewMode === '3d' ? ' active' : ''}` });
         btn3d.textContent = '3D';
         btn3d.title = '3D sphere — orbit to verify landmark placement';
-        btn3d.setAttribute('aria-pressed', String(alignViewMode === '3d'));
+        btn3d.setAttribute('aria-pressed', String(state.alignViewMode === '3d'));
         btn3d.setAttribute('aria-label', '3D sphere view');
-        if (!alignOverlay) { btn3d.disabled = true; btn3d.tabIndex = -1; }
+        if (!state.alignOverlay) { btn3d.disabled = true; btn3d.tabIndex = -1; }
         btn3d.onclick = () => _switchViewMode('3d');
         viewRow.appendChild(btn3d);
 
         const viewSep = el('span', { className: 'view-row-sep' });
         viewRow.appendChild(viewSep);
 
-        const wireBtn = el('button', { className: `view-btn${alignWireframe ? ' active' : ''}` });
+        const wireBtn = el('button', { className: `view-btn${state.alignWireframe ? ' active' : ''}` });
         wireBtn.textContent = '⊡ Wire';
         wireBtn.title = 'Toggle wireframe';
-        wireBtn.setAttribute('aria-pressed', String(alignWireframe));
+        wireBtn.setAttribute('aria-pressed', String(state.alignWireframe));
         wireBtn.setAttribute('aria-label', 'Wireframe rendering');
-        if (!alignOverlay) { wireBtn.disabled = true; wireBtn.tabIndex = -1; }
+        if (!state.alignOverlay) { wireBtn.disabled = true; wireBtn.tabIndex = -1; }
         wireBtn.onclick = () => _toggleWireframe();
         viewRow.appendChild(wireBtn);
 
         container.appendChild(viewRow);
 
         // Rotation sliders (flat mode only)
-        if (alignViewMode === 'flat' && alignStereoView) {
-            const { alpha, beta, gamma } = alignStereoView.getEulerZYX();
+        if (state.alignViewMode === 'flat' && state.alignStereoView) {
+            const { alpha, beta, gamma } = state.alignStereoView.getEulerZYX();
 
             const rotSection = el('div', { className: 'rot-section' });
             const rotLabel = el('div', { className: 'rot-label' });
@@ -1042,7 +986,7 @@ window.app = (() => {
                     const tw = parseInt(document.getElementById('rot-twist')?.value ?? alpha);
                     const tv = parseInt(document.getElementById('rot-tiltv')?.value ?? beta);
                     const th = parseInt(document.getElementById('rot-tilth')?.value ?? gamma);
-                    alignStereoView?.setEulerZYX(tw, tv, th);
+                    state.alignStereoView?.setEulerZYX(tw, tv, th);
                 };
 
                 row.appendChild(slider);
@@ -1057,26 +1001,26 @@ window.app = (() => {
         const addBtn = el('button', { className: 'load-btn' });
         addBtn.textContent = '+ New landmark';
         addBtn.style.marginTop = '0';
-        addBtn.disabled = editDisabled || !alignOverlay;
+        addBtn.disabled = editDisabled || !state.alignOverlay;
         if (editDisabled) addBtn.title = 'Not available in 3D mode';
         addBtn.onclick = () => {
-            if (!alignOverlay || editDisabled) return;
-            alignOverlay.addRegion();
-            renderStep(currentStep);
+            if (!state.alignOverlay || editDisabled) return;
+            state.alignOverlay.addRegion();
+            renderStep(state.currentStep);
         };
         container.appendChild(addBtn);
 
         // Landmark list
         const listEl = el('div', { className: 'landmark-list' });
-        const regions = alignOverlay?.regions ?? [];
+        const regions = state.alignOverlay?.regions ?? [];
         regions.forEach(reg => {
             const item = el('div', {
-                className: `landmark-item${alignOverlay?.region === reg ? ' selected' : ''}`,
+                className: `landmark-item${state.alignOverlay?.region === reg ? ' selected' : ''}`,
             });
             item.onclick = () => {
-                if (!alignOverlay) return;
-                alignOverlay.selectRegion(reg);
-                renderStep(currentStep);
+                if (!state.alignOverlay) return;
+                state.alignOverlay.selectRegion(reg);
+                renderStep(state.currentStep);
             };
 
             const dot = el('div', { className: 'landmark-dot' });
@@ -1085,7 +1029,7 @@ window.app = (() => {
 
             const nameInput = el('input', { className: 'landmark-name', value: reg.name });
             nameInput.onclick = e => e.stopPropagation();
-            nameInput.onchange = () => alignOverlay?.renameRegion(reg, nameInput.value);
+            nameInput.onchange = () => state.alignOverlay?.renameRegion(reg, nameInput.value);
             item.appendChild(nameInput);
 
             const delBtn = el('button', { className: 'landmark-del' });
@@ -1093,8 +1037,8 @@ window.app = (() => {
             delBtn.title = 'Delete landmark';
             delBtn.onclick = e => {
                 e.stopPropagation();
-                alignOverlay?.deleteRegion(reg);
-                renderStep(currentStep);
+                state.alignOverlay?.deleteRegion(reg);
+                renderStep(state.currentStep);
             };
             item.appendChild(delBtn);
             listEl.appendChild(item);
@@ -1126,38 +1070,38 @@ window.app = (() => {
         saveRotBtn.onclick = () => _saveRotationTxt();
         container.appendChild(saveRotBtn);
 
-        if (!alignOverlay && sphere) {
-            setTimeout(() => _activateAlign(alignSubjectId), 0);
+        if (!state.alignOverlay && sphere) {
+            setTimeout(() => _activateAlign(state.alignSubjectId), 0);
         }
     }
 
     async function _loadSulciJSON() {
-        if (!alignOverlay) return;
-        const sulciPath = subjects[alignSubjectId]?.sulci;
+        if (!state.alignOverlay) return;
+        const sulciPath = state.subjects[state.alignSubjectId]?.sulci;
         if (!sulciPath) {
             setStatus('No sulci.json found for this subject');
             return;
         }
         try {
             const data = await apiGet('/api/file', { path: sulciPath });
-            alignOverlay.fromJSON(data);
-            setStatus(`Loaded ${sulciPath.split('/').pop()} — ${alignOverlay.regions.length} landmarks`);
-            renderStep(currentStep);
+            state.alignOverlay.fromJSON(data);
+            setStatus(`Loaded ${sulciPath.split('/').pop()} — ${state.alignOverlay.regions.length} landmarks`);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Load sulci error: ${e.message}`);
         }
     }
 
     async function _saveSulciJSON() {
-        if (!alignOverlay || !alignSubjectId) return;
-        const s = subjects[alignSubjectId];
+        if (!state.alignOverlay || !state.alignSubjectId) return;
+        const s = state.subjects[state.alignSubjectId];
         if (!s?.sphere) return;
         const dir      = s.sphere.substring(0, s.sphere.lastIndexOf('/'));
         const savePath = `${dir}/sulci.json`;
         try {
-            const json = alignOverlay.toJSON();
+            const json = state.alignOverlay.toJSON();
             await apiPut('/api/file', { path: savePath, content: JSON.stringify(json, null, 2) });
-            subjects[alignSubjectId].sulci = savePath;
+            state.subjects[state.alignSubjectId].sulci = savePath;
             setStatus(`Saved ${savePath.split('/').pop()}`);
         } catch (e) {
             setStatus(`Save sulci error: ${e.message}`);
@@ -1165,15 +1109,15 @@ window.app = (() => {
     }
 
     async function _saveRotationTxt() {
-        if (!alignOverlay || !alignSubjectId) return;
-        const s = subjects[alignSubjectId];
+        if (!state.alignOverlay || !state.alignSubjectId) return;
+        const s = state.subjects[state.alignSubjectId];
         if (!s?.sphere) return;
         const dir      = s.sphere.substring(0, s.sphere.lastIndexOf('/'));
         const savePath = `${dir}/rotation.txt`;
         try {
-            const txt = alignOverlay.getCameraRotationText();
+            const txt = state.alignOverlay.getCameraRotationText();
             await apiPut('/api/file', { path: savePath, content: txt });
-            subjects[alignSubjectId].rot = savePath;
+            state.subjects[state.alignSubjectId].rot = savePath;
             setStatus(`Saved ${savePath.split('/').pop()}`);
         } catch (e) {
             setStatus(`Save rotation error: ${e.message}`);
@@ -1186,31 +1130,31 @@ window.app = (() => {
         container.innerHTML = '';
 
         // Auto-populate pickers on first render
-        if (!matchRefId && subjectOrder.length >= 1) matchRefId = subjectOrder[0];
-        if (!matchMovId && subjectOrder.length >= 2) matchMovId = subjectOrder[1];
+        if (!state.matchRefId && state.subjectOrder.length >= 1) state.matchRefId = state.subjectOrder[0];
+        if (!state.matchMovId && state.subjectOrder.length >= 2) state.matchMovId = state.subjectOrder[1];
 
-        const ref = matchRefId ? subjects[matchRefId] : null;
-        const mov = matchMovId ? subjects[matchMovId] : null;
+        const ref = state.matchRefId ? state.subjects[state.matchRefId] : null;
+        const mov = state.matchMovId ? state.subjects[state.matchMovId] : null;
 
         // Auto-derive output dir
-        if (!matchOutDir && matchRefId && matchMovId) {
-            if (projectRoot) {
-                matchOutDir = `${projectRoot}/data/derived/matches/${matchMovId}_as_${matchRefId}`;
+        if (!state.matchOutDir && state.matchRefId && state.matchMovId) {
+            if (state.projectRoot) {
+                state.matchOutDir = `${state.projectRoot}/data/derived/matches/${state.matchMovId}_as_${state.matchRefId}`;
             } else if (mov?.path && ref?.path) {
                 const movDir  = mov.path.substring(0, mov.path.lastIndexOf('/'));
                 const refStem = ref.path.split('/').pop().replace(/\.ply(\.gz)?$/, '');
-                matchOutDir = `${movDir}/match_${refStem}`;
+                state.matchOutDir = `${movDir}/match_${refStem}`;
             }
         }
 
         // ── Existing matches roster ──────────────────────────────────────────
-        if (existingMatches.length > 0) {
+        if (state.existingMatches.length > 0) {
             const rosterSection = el('div', { className: 'sph-section' });
             const rosterHdr = el('div', { className: 'sph-label' });
             rosterHdr.textContent = 'Existing matches';
             rosterSection.appendChild(rosterHdr);
 
-            existingMatches.forEach(m => {
+            state.existingMatches.forEach(m => {
                 const row = el('div', { className: 'match-roster-row' });
                 row.setAttribute('aria-label', `Match ${m.mov_id} → ${m.ref_id}`);
 
@@ -1261,7 +1205,7 @@ window.app = (() => {
             const emptyOpt = el('option');
             emptyOpt.value = ''; emptyOpt.textContent = '— select —';
             sel.appendChild(emptyOpt);
-            subjectOrder.forEach(id => {
+            state.subjectOrder.forEach(id => {
                 const opt = el('option');
                 opt.value = id; opt.textContent = id;
                 if (id === currentId) opt.selected = true;
@@ -1269,16 +1213,16 @@ window.app = (() => {
             });
             sel.onchange = () => {
                 onSet(sel.value || null);
-                matchOutDir = null; morphResult = null; matchResult = null;
-                morphSurface = null; matchSurface = null;
-                renderStep(currentStep);
+                state.matchOutDir = null; state.morphResult = null; state.matchResult = null;
+                state.morphSurface = null; state.matchSurface = null;
+                renderStep(state.currentStep);
             };
             row.appendChild(sel);
             return row;
         };
 
-        pickerSection.appendChild(_makePickerRow('Ref', matchRefId, 'match-ref-select', v => { matchRefId = v; }));
-        pickerSection.appendChild(_makePickerRow('Mov', matchMovId, 'match-mov-select', v => { matchMovId = v; }));
+        pickerSection.appendChild(_makePickerRow('Ref', state.matchRefId, 'match-ref-select', v => { state.matchRefId = v; }));
+        pickerSection.appendChild(_makePickerRow('Mov', state.matchMovId, 'match-mov-select', v => { state.matchMovId = v; }));
         container.appendChild(pickerSection);
         container.appendChild(el('div', { className: 'sph-divider' }));
 
@@ -1288,8 +1232,8 @@ window.app = (() => {
         inputsHdr.textContent = 'Inputs';
         inputsSection.appendChild(inputsHdr);
 
-        inputsSection.appendChild(preItem(matchRefId ? `Ref: ${matchRefId}` : 'Ref: not selected', !!ref?.path));
-        inputsSection.appendChild(preItem(matchMovId ? `Mov: ${matchMovId}` : 'Mov: not selected', !!mov?.path));
+        inputsSection.appendChild(preItem(state.matchRefId ? `Ref: ${state.matchRefId}` : 'Ref: not selected', !!ref?.path));
+        inputsSection.appendChild(preItem(state.matchMovId ? `Mov: ${state.matchMovId}` : 'Mov: not selected', !!mov?.path));
 
         const bothSpheres = !!(ref?.sphere && mov?.sphere);
         const sphereLabel = !ref?.sphere && !mov?.sphere ? 'Spheres: neither computed'
@@ -1298,8 +1242,8 @@ window.app = (() => {
                           : 'Spheres computed';
         inputsSection.appendChild(preItem(sphereLabel, bothSpheres));
 
-        const hasRefSulci = !!(alignInMemory[matchRefId]?.length || ref?.sulci);
-        const hasMovSulci = !!(alignInMemory[matchMovId]?.length || mov?.sulci);
+        const hasRefSulci = !!(state.alignInMemory[state.matchRefId]?.length || ref?.sulci);
+        const hasMovSulci = !!(state.alignInMemory[state.matchMovId]?.length || mov?.sulci);
         const lmkLabel = `Landmarks: ref ${hasRefSulci ? '✓' : '✗'} · mov ${hasMovSulci ? '✓' : '✗'}`;
         inputsSection.appendChild(preItem(lmkLabel, hasRefSulci && hasMovSulci));
 
@@ -1322,9 +1266,9 @@ window.app = (() => {
 
         const outInput = el('input', { className: 'out-dir-input' });
         outInput.type = 'text';
-        outInput.value = matchOutDir || '';
+        outInput.value = state.matchOutDir || '';
         outInput.setAttribute('aria-label', 'Match output directory');
-        outInput.onchange = () => { matchOutDir = outInput.value.trim() || null; };
+        outInput.onchange = () => { state.matchOutDir = outInput.value.trim() || null; };
         outSection.appendChild(outInput);
         container.appendChild(outSection);
         container.appendChild(el('div', { className: 'sph-divider' }));
@@ -1339,25 +1283,25 @@ window.app = (() => {
         viewModeRow.setAttribute('role', 'group');
         viewModeRow.setAttribute('aria-label', 'Match viewer mode');
         const VIEW_MODES = [
-            { id: 'morph', label: 'Morph', ok: !!morphSurface, title: 'Ref → Mov retopology blend' },
-            { id: 'match', label: 'Match', ok: !!matchResult,  title: 'Matched surface' },
+            { id: 'morph', label: 'Morph', ok: !!state.morphSurface, title: 'Ref → Mov retopology blend' },
+            { id: 'match', label: 'Match', ok: !!state.matchResult,  title: 'Matched surface' },
         ];
         VIEW_MODES.forEach(({ id, label, ok, title }) => {
-            const b = el('button', { className: `view-btn${matchViewMode === id ? ' active' : ''}` });
+            const b = el('button', { className: `view-btn${state.matchViewMode === id ? ' active' : ''}` });
             b.textContent = label; b.title = title; b.disabled = !ok;
-            b.setAttribute('aria-pressed', String(matchViewMode === id));
+            b.setAttribute('aria-pressed', String(state.matchViewMode === id));
             b.setAttribute('aria-label', title);
             b.onclick = () => {
                 if (!ok) return;
-                matchViewMode = id;
+                state.matchViewMode = id;
                 _refreshMatchViewer({ preserveOrientation: true });
-                renderStep(currentStep);
+                renderStep(state.currentStep);
             };
             viewModeRow.appendChild(b);
         });
         viewSection.appendChild(viewModeRow);
 
-        if (morphSurface || matchSurface) {
+        if (state.morphSurface || state.matchSurface) {
             const blendRow = el('div', { className: 'param-row' });
             const blendLbl = el('label', { className: 'param-label', htmlFor: 'morph-blend' });
             blendLbl.textContent = 'Ref → Mov';
@@ -1365,23 +1309,23 @@ window.app = (() => {
             const blendSl = el('input');
             blendSl.type = 'range'; blendSl.id = 'morph-blend';
             blendSl.min = '0'; blendSl.max = '1'; blendSl.step = '0.01';
-            blendSl.value = String(morphInterpT);
+            blendSl.value = String(state.morphInterpT);
             blendSl.setAttribute('aria-label', 'Morph blend: Ref to Mov');
             const blendVal = el('input');
             blendVal.type = 'number'; blendVal.className = 'param-val';
             blendVal.min = '0'; blendVal.max = '100'; blendVal.step = '1';
-            blendVal.value = String(Math.round(morphInterpT * 100));
+            blendVal.value = String(Math.round(state.morphInterpT * 100));
             blendVal.setAttribute('aria-label', 'Blend percentage');
             blendSl.oninput = () => {
-                morphInterpT = parseFloat(blendSl.value);
-                blendVal.value = String(Math.round(morphInterpT * 100));
-                viewer.setBlendT(morphInterpT);
+                state.morphInterpT = parseFloat(blendSl.value);
+                blendVal.value = String(Math.round(state.morphInterpT * 100));
+                state.viewer.setBlendT(state.morphInterpT);
             };
             blendVal.oninput = () => {
                 const pct = Math.max(0, Math.min(100, parseInt(blendVal.value) || 0));
-                morphInterpT = pct / 100;
-                blendSl.value = String(morphInterpT);
-                viewer.setBlendT(morphInterpT);
+                state.morphInterpT = pct / 100;
+                blendSl.value = String(state.morphInterpT);
+                state.viewer.setBlendT(state.morphInterpT);
             };
             blendRow.appendChild(blendSl); blendRow.appendChild(blendVal);
             viewSection.appendChild(blendRow);
@@ -1402,12 +1346,12 @@ window.app = (() => {
 
         const morphBarWrap = el('div', { className: 'progress-bar-wrap' });
         morphBarWrap.id = 'morph-progress';
-        morphBarWrap.style.display = morphResult ? 'block' : 'none';
+        morphBarWrap.style.display = state.morphResult ? 'block' : 'none';
         const morphBarFill = el('div', { className: 'progress-bar' });
         morphBarFill.setAttribute('role', 'progressbar');
-        morphBarFill.setAttribute('aria-valuenow', morphResult ? '100' : '0');
+        morphBarFill.setAttribute('aria-valuenow', state.morphResult ? '100' : '0');
         morphBarFill.setAttribute('aria-valuemax', '100');
-        if (morphResult) morphBarFill.style.width = '100%';
+        if (state.morphResult) morphBarFill.style.width = '100%';
         morphBarWrap.appendChild(morphBarFill);
         morphSection.appendChild(morphBarWrap);
 
@@ -1421,7 +1365,7 @@ window.app = (() => {
         morphBtn.onclick = () => _runMorph(morphBarFill, morphBtn);
         morphSection.appendChild(morphBtn);
 
-        if (morphResult) {
+        if (state.morphResult) {
             const done = el('div', { className: 'pre-check pre-done' });
             done.textContent = '✓ morph.sphere.ply saved';
             morphSection.appendChild(done);
@@ -1448,17 +1392,17 @@ window.app = (() => {
         const kSlider = el('input');
         kSlider.type = 'range'; kSlider.id = 'match-k';
         kSlider.min = '20'; kSlider.max = '200'; kSlider.step = '5';
-        kSlider.value = String(matchK);
+        kSlider.value = String(state.matchK);
         kSlider.setAttribute('aria-label', 'k eigenvectors');
         const kVal = el('input');
         kVal.type = 'number'; kVal.className = 'param-val';
         kVal.min = '20'; kVal.max = '200'; kVal.step = '5';
-        kVal.value = String(matchK);
+        kVal.value = String(state.matchK);
         kVal.setAttribute('aria-label', 'k eigenvectors value');
-        kSlider.oninput = () => { matchK = parseInt(kSlider.value); kVal.value = kSlider.value; };
+        kSlider.oninput = () => { state.matchK = parseInt(kSlider.value); kVal.value = kSlider.value; };
         kVal.oninput = () => {
             const v = Math.max(20, Math.min(200, parseInt(kVal.value) || 20));
-            matchK = v; kSlider.value = String(v);
+            state.matchK = v; kSlider.value = String(v);
         };
         kRow.appendChild(kSlider); kRow.appendChild(kVal);
         matchSection.appendChild(kRow);
@@ -1471,10 +1415,10 @@ window.app = (() => {
         stepsGroup.setAttribute('role', 'group');
         stepsGroup.setAttribute('aria-label', 'Refinement steps');
         [1, 2, 3, 4, 5].forEach(n => {
-            const btn = el('button', { className: `step-seg${matchNsteps === n ? ' active' : ''}` });
+            const btn = el('button', { className: `step-seg${state.matchNsteps === n ? ' active' : ''}` });
             btn.textContent = String(n);
-            btn.setAttribute('aria-pressed', String(matchNsteps === n));
-            btn.onclick = () => { matchNsteps = n; renderStep(currentStep); };
+            btn.setAttribute('aria-pressed', String(state.matchNsteps === n));
+            btn.onclick = () => { state.matchNsteps = n; renderStep(state.currentStep); };
             stepsGroup.appendChild(btn);
         });
         stepsRow.appendChild(stepsGroup);
@@ -1485,9 +1429,9 @@ window.app = (() => {
         advSum.textContent = 'Advanced';
         adv.appendChild(advSum);
         [
-            { id: 'w-smooth',  label: 'Smooth weight',  min: 0, max: 10, step: 0.1, get: () => matchWSmooth,  set: v => { matchWSmooth  = v; } },
-            { id: 'w-deform',  label: 'Deform weight',  min: 0, max: 50, step: 0.5, get: () => matchWDeform,  set: v => { matchWDeform  = v; } },
-            { id: 'w-project', label: 'Project weight', min: 0, max: 10, step: 0.1, get: () => matchWProject, set: v => { matchWProject = v; } },
+            { id: 'w-smooth',  label: 'Smooth weight',  min: 0, max: 10, step: 0.1, get: () => state.matchWSmooth,  set: v => { state.matchWSmooth  = v; } },
+            { id: 'w-deform',  label: 'Deform weight',  min: 0, max: 50, step: 0.5, get: () => state.matchWDeform,  set: v => { state.matchWDeform  = v; } },
+            { id: 'w-project', label: 'Project weight', min: 0, max: 10, step: 0.1, get: () => state.matchWProject, set: v => { state.matchWProject = v; } },
         ].forEach(({ id, label, min, max, step, get, set }) => {
             const row = el('div', { className: 'param-row' });
             const lbl = el('label', { className: 'param-label', htmlFor: `match-${id}` });
@@ -1524,15 +1468,15 @@ window.app = (() => {
         const matchBtn = el('button', { className: 'load-btn' });
         matchBtn.id = 'btn-run-match';
         matchBtn.textContent = '▶ Run Match';
-        matchBtn.disabled = !morphResult;
+        matchBtn.disabled = !state.morphResult;
         matchBtn.setAttribute('aria-label', 'Run match optimisation');
-        if (!morphResult) matchBtn.setAttribute('aria-disabled', 'true');
+        if (!state.morphResult) matchBtn.setAttribute('aria-disabled', 'true');
         matchBtn.onclick = () => _runMatch(matchBarWrap, matchBarFill, matchBtn);
         matchSection.appendChild(matchBtn);
 
-        if (matchResult) {
+        if (state.matchResult) {
             const done = el('div', { className: 'pre-check pre-done' });
-            done.textContent = `✓ ${matchResult.matched_ply.split('/').pop()} saved`;
+            done.textContent = `✓ ${state.matchResult.matched_ply.split('/').pop()} saved`;
             matchSection.appendChild(done);
 
         }
@@ -1541,22 +1485,22 @@ window.app = (() => {
     }
 
     async function _refreshMatchViewer({ preserveOrientation = false } = {}) {
-        if (!matchRefId || !subjects[matchRefId]) return;
+        if (!state.matchRefId || !state.subjects[state.matchRefId]) return;
 
-        if (matchViewMode === 'morph' || !matchResult) {
-            viewer.clearAll();
-            if (morphSurface) {
-                viewer.loadBlendMesh(morphSurface.refVerts, morphSurface.morphVerts, morphSurface.faces);
-                viewer.setBlendT(morphInterpT);
-            } else if (morphSphereData) {
-                viewer.loadMatchFromData(morphSphereData.vertices, morphSphereData.faces, { opacity: 1.0 });
+        if (state.matchViewMode === 'morph' || !state.matchResult) {
+            state.viewer.clearAll();
+            if (state.morphSurface) {
+                state.viewer.loadBlendMesh(state.morphSurface.refVerts, state.morphSurface.morphVerts, state.morphSurface.faces);
+                state.viewer.setBlendT(state.morphInterpT);
+            } else if (state.morphSphereData) {
+                state.viewer.loadMatchFromData(state.morphSphereData.vertices, state.morphSphereData.faces, { opacity: 1.0 });
             }
             return;
         }
-        viewer.clearAll();
-        if (matchSurface) {
-            viewer.loadBlendMesh(matchSurface.refVerts, matchSurface.matchVerts, matchSurface.faces);
-            viewer.setBlendT(morphInterpT);
+        state.viewer.clearAll();
+        if (state.matchSurface) {
+            state.viewer.loadBlendMesh(state.matchSurface.refVerts, state.matchSurface.matchVerts, state.matchSurface.faces);
+            state.viewer.setBlendT(state.morphInterpT);
         }
     }
 
@@ -1566,20 +1510,20 @@ window.app = (() => {
         fillEl.style.width = '5%';
         setStatus('Running morph…');
         try {
-            const ref = subjects[matchRefId];
-            const mov = subjects[matchMovId];
+            const ref = state.subjects[state.matchRefId];
+            const mov = state.subjects[state.matchMovId];
 
-            const sulciRefData = alignInMemory[matchRefId] ?? await apiGet('/api/file', { path: ref.sulci });
-            const sulciMovData = alignInMemory[matchMovId] ?? await apiGet('/api/file', { path: mov.sulci });
+            const sulciRefData = state.alignInMemory[state.matchRefId] ?? await apiGet('/api/file', { path: ref.sulci });
+            const sulciMovData = state.alignInMemory[state.matchMovId] ?? await apiGet('/api/file', { path: mov.sulci });
             fillEl.style.width = '15%';
 
-            if (!matchOutDir) {
-                if (projectRoot) {
-                    matchOutDir = `${projectRoot}/data/derived/matches/${matchMovId}_as_${matchRefId}`;
+            if (!state.matchOutDir) {
+                if (state.projectRoot) {
+                    state.matchOutDir = `${state.projectRoot}/data/derived/matches/${state.matchMovId}_as_${state.matchRefId}`;
                 } else {
                     const movDir  = mov.path.substring(0, mov.path.lastIndexOf('/'));
                     const refStem = ref.path.split('/').pop().replace(/\.ply(\.gz)?$/, '');
-                    matchOutDir = `${movDir}/match_${refStem}`;
+                    state.matchOutDir = `${movDir}/match_${refStem}`;
                 }
             }
 
@@ -1587,7 +1531,7 @@ window.app = (() => {
                 ref_sphere: ref.sphere,
                 sulci_ref:  sulciRefData,
                 sulci_mov:  sulciMovData,
-                out_dir:    matchOutDir,
+                out_dir:    state.matchOutDir,
             };
             if (ref.rot) body.rot_ref_path = ref.rot;
             if (mov.rot) body.rot_mov_path = mov.rot;
@@ -1623,15 +1567,15 @@ window.app = (() => {
                 movNat.vertices,
                 morphSphRaw.vertices,
             );
-            morphSurface    = { refVerts: refNat.vertices, morphVerts: remeshed, faces: refSphRaw.faces };
-            morphResult     = { morph_sphere_path: result.morph_sphere_path };
-            morphSphereData = { vertices: morphSphRaw.vertices, faces: refSphRaw.faces };
-            matchViewMode   = 'morph';
+            state.morphSurface    = { refVerts: refNat.vertices, morphVerts: remeshed, faces: refSphRaw.faces };
+            state.morphResult     = { morph_sphere_path: result.morph_sphere_path };
+            state.morphSphereData = { vertices: morphSphRaw.vertices, faces: refSphRaw.faces };
+            state.matchViewMode   = 'morph';
             fillEl.style.width = '100%';
 
             await _refreshMatchViewer({ preserveOrientation: false });
             setStatus('Morph done — retopology complete');
-            renderStep(currentStep);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Morph error: ${e.message}`);
             btn.disabled = false;
@@ -1640,13 +1584,13 @@ window.app = (() => {
     }
 
     async function _runMatch(barWrap, fillEl, btn) {
-        if (!morphResult || !matchOutDir) return;
+        if (!state.morphResult || !state.matchOutDir) return;
         btn.disabled = true;
         barWrap.style.display = 'block';
         setStatus('Running match optimisation…');
         try {
-            const ref = subjects[matchRefId];
-            const mov = subjects[matchMovId];
+            const ref = state.subjects[state.matchRefId];
+            const mov = state.subjects[state.matchMovId];
 
             // matchmesh2 naming: "ref" = brain to project onto = UI's mov
             //                    "mov" = sphere to deform      = UI's ref
@@ -1655,50 +1599,50 @@ window.app = (() => {
                 ref_sphere:   mov.sphere,
                 mov_ply:      ref.path,
                 mov_sphere:   ref.sphere,
-                morph_sphere: morphResult.morph_sphere_path,
-                out_dir:      matchOutDir,
-                k:            matchK,
-                nsteps:       matchNsteps,
-                w_smooth:     matchWSmooth,
-                w_deform:     matchWDeform,
-                w_project:    matchWProject,
+                morph_sphere: state.morphResult.morph_sphere_path,
+                out_dir:      state.matchOutDir,
+                k:            state.matchK,
+                nsteps:       state.matchNsteps,
+                w_smooth:     state.matchWSmooth,
+                w_deform:     state.matchWDeform,
+                w_project:    state.matchWProject,
             };
             if (mov.rot) body.ref_rot = mov.rot;
             if (ref.rot) body.mov_rot = ref.rot;
 
             const { job_id } = await apiPost('/api/match', body);
             const result = await pollJob(job_id);
-            matchResult   = result;
-            matchViewMode = 'match';
+            state.matchResult   = result;
+            state.matchViewMode = 'match';
             barWrap.style.display = 'none';
 
             const params = {
-                ref_id:    matchRefId,
-                mov_id:    matchMovId,
+                ref_id:    state.matchRefId,
+                mov_id:    state.matchMovId,
                 timestamp: new Date().toISOString(),
                 match: {
-                    k:         matchK,
-                    nsteps:    matchNsteps,
-                    w_smooth:  matchWSmooth,
-                    w_deform:  matchWDeform,
-                    w_project: matchWProject,
+                    k:         state.matchK,
+                    nsteps:    state.matchNsteps,
+                    w_smooth:  state.matchWSmooth,
+                    w_deform:  state.matchWDeform,
+                    w_project: state.matchWProject,
                 },
             };
             apiPut('/api/file', {
-                path:    `${matchOutDir}/params.json`,
+                path:    `${state.matchOutDir}/params.json`,
                 content: JSON.stringify(params, null, 2),
             }).catch(() => {});
 
             const matchedNatRaw = await apiGet('/api/mesh_raw', { path: result.matched_ply });
-            const refVerts = morphSurface ? morphSurface.refVerts
+            const refVerts = state.morphSurface ? state.morphSurface.refVerts
                 : (await apiGet('/api/mesh_raw', { path: ref.path })).vertices;
-            const refFaces = morphSurface ? morphSurface.faces : matchedNatRaw.faces;
-            matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: refFaces };
+            const refFaces = state.morphSurface ? state.morphSurface.faces : matchedNatRaw.faces;
+            state.matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: refFaces };
 
             await _refreshMatchViewer({ preserveOrientation: true });
             setStatus(`Match done — ${result.matched_ply.split('/').pop()}`);
             await _loadExistingMatches();
-            renderStep(currentStep);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Match error: ${e.message}`);
             btn.disabled = false;
@@ -1709,11 +1653,11 @@ window.app = (() => {
     // ── Match roster helpers ─────────────────────────────────────────────────
 
     async function _loadExistingMatches() {
-        if (!projectRoot) { existingMatches = []; return; }
+        if (!state.projectRoot) { state.existingMatches = []; return; }
         try {
-            existingMatches = await getMatches(projectRoot);
+            state.existingMatches = await getMatches(state.projectRoot);
         } catch {
-            existingMatches = [];
+            state.existingMatches = [];
         }
     }
 
@@ -1721,32 +1665,32 @@ window.app = (() => {
         if (!m.has_match) return;
         setStatus(`Loading match ${m.name}…`);
 
-        matchRefId  = m.ref_id;
-        matchMovId  = m.mov_id;
-        matchOutDir = m.dir;
-        matchResult  = { matched_ply: `${m.dir}/surf.0.ply` };
-        matchViewMode = 'match';
-        morphResult  = m.has_morph ? { morph_sphere_path: `${m.dir}/morph.sphere.ply` } : null;
-        morphSurface = null;
+        state.matchRefId  = m.ref_id;
+        state.matchMovId  = m.mov_id;
+        state.matchOutDir = m.dir;
+        state.matchResult  = { matched_ply: `${m.dir}/surf.0.ply` };
+        state.matchViewMode = 'match';
+        state.morphResult  = m.has_morph ? { morph_sphere_path: `${m.dir}/morph.sphere.ply` } : null;
+        state.morphSurface = null;
 
         try {
             const matchedPly    = `${m.dir}/surf.0.ply`;
             const matchedNatRaw = await apiGet('/api/mesh_raw', { path: matchedPly });
 
-            const ref = subjects[matchRefId];
+            const ref = state.subjects[state.matchRefId];
             const refVerts = ref?.path
                 ? (await apiGet('/api/mesh_raw', { path: ref.path })).vertices
                 : matchedNatRaw.vertices;
 
-            matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: matchedNatRaw.faces };
+            state.matchSurface = { refVerts, matchVerts: matchedNatRaw.vertices, faces: matchedNatRaw.faces };
 
             await _refreshMatchViewer({ preserveOrientation: false });
             setStatus(`Loaded ${m.name}`);
-            renderStep(currentStep);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Load error: ${e.message}`);
-            matchResult = null; matchSurface = null;
-            renderStep(currentStep);
+            state.matchResult = null; state.matchSurface = null;
+            renderStep(state.currentStep);
         }
     }
 
@@ -1763,11 +1707,11 @@ window.app = (() => {
             e.stopPropagation();
             try { await deleteMatch({ match_dir: m.dir }); } catch { /* still remove row */ }
             rowEl.remove();
-            existingMatches = existingMatches.filter(x => x.dir !== m.dir);
-            if (matchOutDir === m.dir) {
-                matchOutDir = null; morphResult = null; matchResult = null;
-                morphSurface = null; matchSurface = null;
-                viewer.clearAll();
+            state.existingMatches = state.existingMatches.filter(x => x.dir !== m.dir);
+            if (state.matchOutDir === m.dir) {
+                state.matchOutDir = null; state.morphResult = null; state.matchResult = null;
+                state.morphSurface = null; state.matchSurface = null;
+                state.viewer.clearAll();
             }
             if (sectionEl.querySelectorAll('.match-roster-row').length === 0) {
                 sectionEl.remove();
@@ -1787,22 +1731,22 @@ window.app = (() => {
     // ── Step 5 — Trajectory ──────────────────────────────────────────────────
 
     async function _loadExistingTrajectories() {
-        if (!projectRoot) { existingTrajectories = []; return; }
-        try { existingTrajectories = await getTrajectories(projectRoot); }
-        catch { existingTrajectories = []; }
+        if (!state.projectRoot) { state.existingTrajectories = []; return; }
+        try { state.existingTrajectories = await getTrajectories(state.projectRoot); }
+        catch { state.existingTrajectories = []; }
     }
 
     function _renderTrajectoryPanel(container) {
         container.innerHTML = '';
 
         // ── Existing trajectories roster ─────────────────────────────────────
-        if (existingTrajectories.length > 0) {
+        if (state.existingTrajectories.length > 0) {
             const sec = el('div', { className: 'sph-section' });
             const hdr = el('div', { className: 'sph-label' });
             hdr.textContent = 'Existing trajectories';
             sec.appendChild(hdr);
 
-            existingTrajectories.forEach(t => {
+            state.existingTrajectories.forEach(t => {
                 const row = el('div', { className: 'match-roster-row' });
 
                 const nameEl = el('span', { className: 'match-roster-name' });
@@ -1816,8 +1760,8 @@ window.app = (() => {
                 row.appendChild(info);
 
                 const loadBtn = el('button', { className: 'roster-load-btn' });
-                loadBtn.textContent = loadedTrajDir === t.dir ? 'Loaded' : 'Load';
-                loadBtn.disabled = !t.done || loadedTrajDir === t.dir;
+                loadBtn.textContent = state.loadedTrajDir === t.dir ? 'Loaded' : 'Load';
+                loadBtn.disabled = !t.done || state.loadedTrajDir === t.dir;
                 loadBtn.setAttribute('aria-label', `Load trajectory ${t.name}`);
                 loadBtn.onclick = () => _loadTrajectoryFromDisk(t);
                 row.appendChild(loadBtn);
@@ -1836,7 +1780,7 @@ window.app = (() => {
         }
 
         // ── New trajectory ────────────────────────────────────────────────────
-        if (projectRoot) {
+        if (state.projectRoot) {
             const newSec = el('div', { className: 'sph-section' });
             const newHdr = el('div', { className: 'sph-label' });
             newHdr.textContent = 'New trajectory';
@@ -1848,7 +1792,7 @@ window.app = (() => {
             newSec.appendChild(seqLabel);
 
             const seqList = el('div', { className: 'traj-seq-list' });
-            trajSeq.forEach((id, i) => {
+            state.trajSeq.forEach((id, i) => {
                 const pill = el('div', { className: 'traj-seq-row' });
 
                 const idEl = el('span', { className: 'traj-seq-id' });
@@ -1858,18 +1802,18 @@ window.app = (() => {
                 const upBtn = el('button', { className: 'traj-seq-btn' });
                 upBtn.textContent = '▲'; upBtn.title = 'Move up';
                 upBtn.disabled = i === 0;
-                upBtn.onclick = () => { trajSeq.splice(i - 1, 0, trajSeq.splice(i, 1)[0]); renderStep(currentStep); };
+                upBtn.onclick = () => { state.trajSeq.splice(i - 1, 0, state.trajSeq.splice(i, 1)[0]); renderStep(state.currentStep); };
                 pill.appendChild(upBtn);
 
                 const dnBtn = el('button', { className: 'traj-seq-btn' });
                 dnBtn.textContent = '▼'; dnBtn.title = 'Move down';
-                dnBtn.disabled = i === trajSeq.length - 1;
-                dnBtn.onclick = () => { trajSeq.splice(i + 1, 0, trajSeq.splice(i, 1)[0]); renderStep(currentStep); };
+                dnBtn.disabled = i === state.trajSeq.length - 1;
+                dnBtn.onclick = () => { state.trajSeq.splice(i + 1, 0, state.trajSeq.splice(i, 1)[0]); renderStep(state.currentStep); };
                 pill.appendChild(dnBtn);
 
                 const rmBtn = el('button', { className: 'traj-seq-btn traj-seq-rm' });
                 rmBtn.textContent = '✕';
-                rmBtn.onclick = () => { trajSeq.splice(i, 1); renderStep(currentStep); };
+                rmBtn.onclick = () => { state.trajSeq.splice(i, 1); renderStep(state.currentStep); };
                 pill.appendChild(rmBtn);
 
                 seqList.appendChild(pill);
@@ -1881,21 +1825,21 @@ window.app = (() => {
             const blankOpt = el('option');
             blankOpt.value = ''; blankOpt.textContent = '— add subject —';
             addSel.appendChild(blankOpt);
-            subjectOrder.forEach(sid => {
-                if (trajSeq.includes(sid)) return;
+            state.subjectOrder.forEach(sid => {
+                if (state.trajSeq.includes(sid)) return;
                 const opt = el('option');
                 opt.value = sid; opt.textContent = sid;
                 addSel.appendChild(opt);
             });
             addSel.onchange = () => {
-                if (addSel.value) { trajSeq.push(addSel.value); renderStep(currentStep); }
+                if (addSel.value) { state.trajSeq.push(addSel.value); renderStep(state.currentStep); }
             };
             addRow.appendChild(addSel);
             seqList.appendChild(addRow);
             newSec.appendChild(seqList);
 
             // Required pairs validation
-            if (trajSeq.length >= 2) {
+            if (state.trajSeq.length >= 2) {
                 const pairsDiv = el('div', { className: 'traj-pairs' });
                 const pairsLbl = el('div', { className: 'sph-label' });
                 pairsLbl.textContent = 'Required matches';
@@ -1903,11 +1847,11 @@ window.app = (() => {
                 pairsDiv.appendChild(pairsLbl);
 
                 let allPairsOk = true;
-                for (let i = 0; i < trajSeq.length - 1; i++) {
-                    const ref    = trajSeq[i];
-                    const mov    = trajSeq[i + 1];
-                    const fwdOk  = existingMatches.some(m => m.mov_id === mov && m.ref_id === ref && m.has_match);
-                    const invOk  = !fwdOk && existingMatches.some(m => m.mov_id === ref && m.ref_id === mov && m.has_match);
+                for (let i = 0; i < state.trajSeq.length - 1; i++) {
+                    const ref    = state.trajSeq[i];
+                    const mov    = state.trajSeq[i + 1];
+                    const fwdOk  = state.existingMatches.some(m => m.mov_id === mov && m.ref_id === ref && m.has_match);
+                    const invOk  = !fwdOk && state.existingMatches.some(m => m.mov_id === ref && m.ref_id === mov && m.has_match);
                     const ok     = fwdOk || invOk;
                     if (!ok) allPairsOk = false;
                     const icon   = ok ? '◉' : '○';
@@ -1927,16 +1871,16 @@ window.app = (() => {
                 modeRow.appendChild(modeLbl);
                 const modeGrp = el('div', { className: 'steps-group' });
                 ['raw', 'smooth'].forEach(m => {
-                    const btn = el('button', { className: `step-seg${trajMode === m ? ' active' : ''}` });
+                    const btn = el('button', { className: `step-seg${state.trajMode === m ? ' active' : ''}` });
                     btn.textContent = m.charAt(0).toUpperCase() + m.slice(1);
-                    btn.onclick = () => { trajMode = m; renderStep(currentStep); };
+                    btn.onclick = () => { state.trajMode = m; renderStep(state.currentStep); };
                     modeGrp.appendChild(btn);
                 });
                 modeRow.appendChild(modeGrp);
                 newSec.appendChild(modeRow);
 
                 // Advanced parameters (smooth mode only)
-                if (trajMode === 'smooth') {
+                if (state.trajMode === 'smooth') {
                     const adv = el('details', { className: 'advanced-details' });
                     const sum = el('summary');
                     sum.textContent = 'Advanced';
@@ -1953,15 +1897,15 @@ window.app = (() => {
                         return row;
                     };
 
-                    adv.appendChild(_paramRow('Deform smooth', () => trajNDeformSmooth, v => { trajNDeformSmooth = v; }, 0, 20, 1));
-                    adv.appendChild(_paramRow('Traj smooth', () => trajNTrajSmooth, v => { trajNTrajSmooth = v; }, 0, 10, 1));
-                    adv.appendChild(_paramRow('Spatial smooth', () => trajNSpatialSmooth, v => { trajNSpatialSmooth = v; }, 0, 10, 1));
-                    adv.appendChild(_paramRow('λ spatial', () => trajLambdaSpatial, v => { trajLambdaSpatial = v; }, 0.001, 0.1, 0.001));
+                    adv.appendChild(_paramRow('Deform smooth', () => state.trajNDeformSmooth, v => { state.trajNDeformSmooth = v; }, 0, 20, 1));
+                    adv.appendChild(_paramRow('Traj smooth', () => state.trajNTrajSmooth, v => { state.trajNTrajSmooth = v; }, 0, 10, 1));
+                    adv.appendChild(_paramRow('Spatial smooth', () => state.trajNSpatialSmooth, v => { state.trajNSpatialSmooth = v; }, 0, 10, 1));
+                    adv.appendChild(_paramRow('λ spatial', () => state.trajLambdaSpatial, v => { state.trajLambdaSpatial = v; }, 0.001, 0.1, 0.001));
 
                     const icpRow = el('div', { className: 'param-row' });
                     const icpLbl = el('span', { className: 'param-label' }); icpLbl.textContent = 'ICP align'; icpRow.appendChild(icpLbl);
-                    const icpCb = el('input'); icpCb.type = 'checkbox'; icpCb.checked = trajDoIcp;
-                    icpCb.onchange = () => { trajDoIcp = icpCb.checked; };
+                    const icpCb = el('input'); icpCb.type = 'checkbox'; icpCb.checked = state.trajDoIcp;
+                    icpCb.onchange = () => { state.trajDoIcp = icpCb.checked; };
                     icpRow.appendChild(icpCb);
                     adv.appendChild(icpRow);
 
@@ -1990,18 +1934,18 @@ window.app = (() => {
         playHdr.textContent = 'Playback';
         playSec.appendChild(playHdr);
 
-        if (!projectRoot && !player?.isLoaded) {
+        if (!state.projectRoot && !state.player?.isLoaded) {
             const demoBtn = el('button', { className: 'load-btn' });
             demoBtn.textContent = 'Load demo trajectory';
             demoBtn.onclick = () => _loadTrajectoryDemo();
             playSec.appendChild(demoBtn);
         }
 
-        if (player?.isLoaded) {
+        if (state.player?.isLoaded) {
             const info = el('div', { className: 'traj-info' });
-            info.textContent = `${player.frameCount} frames`;
-            if (loadedTrajDir) {
-                const traj = existingTrajectories.find(t => t.dir === loadedTrajDir);
+            info.textContent = `${state.player.frameCount} frames`;
+            if (state.loadedTrajDir) {
+                const traj = state.existingTrajectories.find(t => t.dir === state.loadedTrajDir);
                 if (traj) info.textContent += ` · ${traj.name}`;
             }
             playSec.appendChild(info);
@@ -2010,12 +1954,12 @@ window.app = (() => {
             const ctrlRow = el('div', { className: 'traj-ctrl-row' });
 
             const playBtn = el('button', { className: 'traj-play-rp', id: 'rp-traj-play' });
-            playBtn.textContent = player.isPlaying ? '⏸' : '▶';
+            playBtn.textContent = state.player.isPlaying ? '⏸' : '▶';
             playBtn.title = 'Play / Pause';
             playBtn.setAttribute('aria-label', 'Play / Pause trajectory');
             playBtn.onclick = () => {
-                if (player.isPlaying) { player.pause(); playBtn.textContent = '▶'; }
-                else                   { player.play();  playBtn.textContent = '⏸'; }
+                if (state.player.isPlaying) { state.player.pause(); playBtn.textContent = '▶'; }
+                else                   { state.player.play();  playBtn.textContent = '⏸'; }
             };
             ctrlRow.appendChild(playBtn);
 
@@ -2023,17 +1967,17 @@ window.app = (() => {
             scrubber.type = 'range'; scrubber.id = 'rp-traj-scrubber';
             scrubber.className = 'traj-scrub-rp';
             scrubber.min = '0'; scrubber.max = '1000'; scrubber.step = '1';
-            scrubber.value = String(Math.round(player.t * 1000));
+            scrubber.value = String(Math.round(state.player.t * 1000));
             scrubber.setAttribute('aria-label', 'Trajectory position');
             scrubber.oninput = () => {
                 const t = parseInt(scrubber.value) / 1000;
                 document.getElementById('rp-traj-time').textContent = t.toFixed(2);
-                player.seek(t);
+                state.player.seek(t);
             };
             ctrlRow.appendChild(scrubber);
 
             const timeEl = el('span', { className: 'traj-time-rp', id: 'rp-traj-time' });
-            timeEl.textContent = player.t.toFixed(2);
+            timeEl.textContent = state.player.t.toFixed(2);
             ctrlRow.appendChild(timeEl);
             playSec.appendChild(ctrlRow);
 
@@ -2043,9 +1987,9 @@ window.app = (() => {
             speedInput.type = 'range'; speedInput.min = '1'; speedInput.max = '12';
             speedInput.step = '0.5';
             // player.speed is one-direction duration (seconds); invert so slider right = faster
-            speedInput.value = String(13 - player.speed);
+            speedInput.value = String(13 - state.player.speed);
             speedInput.className = 'traj-speed';
-            speedInput.oninput = () => { player.speed = 13 - parseFloat(speedInput.value); };
+            speedInput.oninput = () => { state.player.speed = 13 - parseFloat(speedInput.value); };
             speedRow.appendChild(speedInput);
             playSec.appendChild(speedRow);
 
@@ -2053,9 +1997,9 @@ window.app = (() => {
             const ppLabel = el('label', { className: 'traj-pp-label' });
             const ppCheck = el('input');
             ppCheck.type = 'checkbox'; ppCheck.id = 'rp-traj-pingpong';
-            ppCheck.checked = player.pingPong;
+            ppCheck.checked = state.player.pingPong;
             ppCheck.setAttribute('aria-label', 'Forth and back playback');
-            ppCheck.onchange = () => { player.pingPong = ppCheck.checked; };
+            ppCheck.onchange = () => { state.player.pingPong = ppCheck.checked; };
             ppLabel.appendChild(ppCheck);
             ppLabel.append(' Forth & back');
             ppRow.appendChild(ppLabel);
@@ -2079,57 +2023,57 @@ window.app = (() => {
                 .sort((a, b) => parseInt(a.name) - parseInt(b.name))
                 .map(f => meshUrl(f.path));
             if (!urls.length) throw new Error('No PLY frames found in trajectory/');
-            if (!player) {
-                player = new TrajectoryPlayer(viewer);
-                player.onSeek(t => _updateScrubber(t));
-                window._player = player;
+            if (!state.player) {
+                state.player = new TrajectoryPlayer(state.viewer);
+                state.player.onSeek(t => _updateScrubber(t));
+                window._player = state.player;
             }
-            await player.load(urls);
-            loadedTrajDir = traj.dir;
+            await state.player.load(urls);
+            state.loadedTrajDir = traj.dir;
             // Populate the builder form from saved params so user can recompute
             if (traj.params) {
                 const p = traj.params;
-                if (Array.isArray(p.seq) && p.seq.length >= 2) trajSeq = [...p.seq];
-                if (p.mode === 'raw' || p.mode === 'smooth') trajMode = p.mode;
-                if (p.n_deformation_smooth != null) trajNDeformSmooth = p.n_deformation_smooth;
-                if (p.do_icp != null)               trajDoIcp         = !!p.do_icp;
-                if (p.n_trajectory_smooth != null)  trajNTrajSmooth   = p.n_trajectory_smooth;
-                if (p.n_spatial_smooth != null)     trajNSpatialSmooth = p.n_spatial_smooth;
-                if (p.lambda_spatial != null)       trajLambdaSpatial  = p.lambda_spatial;
+                if (Array.isArray(p.seq) && p.seq.length >= 2) state.trajSeq = [...p.seq];
+                if (p.mode === 'raw' || p.mode === 'smooth') state.trajMode = p.mode;
+                if (p.n_deformation_smooth != null) state.trajNDeformSmooth = p.n_deformation_smooth;
+                if (p.do_icp != null)               state.trajDoIcp         = !!p.do_icp;
+                if (p.n_trajectory_smooth != null)  state.trajNTrajSmooth   = p.n_trajectory_smooth;
+                if (p.n_spatial_smooth != null)     state.trajNSpatialSmooth = p.n_spatial_smooth;
+                if (p.lambda_spatial != null)       state.trajLambdaSpatial  = p.lambda_spatial;
             }
-            setStatus(`Trajectory loaded — ${player.frameCount} frames`);
-            renderStep(currentStep);
+            setStatus(`Trajectory loaded — ${state.player.frameCount} frames`);
+            renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Trajectory load error: ${e.message}`);
         }
     }
 
     async function _runTrajectory() {
-        if (!projectRoot || trajSeq.length < 2) return;
-        const suffix    = trajMode === 'smooth' ? '_smooth' : '';
-        const traj_name = trajSeq.join('-') + suffix;
+        if (!state.projectRoot || state.trajSeq.length < 2) return;
+        const suffix    = state.trajMode === 'smooth' ? '_smooth' : '';
+        const traj_name = state.trajSeq.join('-') + suffix;
         setStatus('Submitting trajectory job…');
         try {
             const { job_id, out_dir } = await startTrajectory({
-                project_root:        projectRoot,
-                seq:                 trajSeq,
+                project_root:        state.projectRoot,
+                seq:                 state.trajSeq,
                 traj_name,
-                mode:                trajMode,
-                n_deformation_smooth: trajNDeformSmooth,
-                do_icp:              trajDoIcp,
-                n_trajectory_smooth: trajNTrajSmooth,
-                n_spatial_smooth:    trajNSpatialSmooth,
-                lambda_spatial:      trajLambdaSpatial,
+                mode:                state.trajMode,
+                n_deformation_smooth: state.trajNDeformSmooth,
+                do_icp:              state.trajDoIcp,
+                n_trajectory_smooth: state.trajNTrajSmooth,
+                n_spatial_smooth:    state.trajNSpatialSmooth,
+                lambda_spatial:      state.trajLambdaSpatial,
             });
             await pollJob(job_id, { onProgress: p => setStatus(`Trajectory: ${Math.round(p * 100)}%`) });
             setStatus('Trajectory done — loading…');
             await _loadExistingTrajectories();
-            const traj = existingTrajectories.find(t => t.dir === out_dir);
+            const traj = state.existingTrajectories.find(t => t.dir === out_dir);
             if (traj) await _loadTrajectoryFromDisk(traj);
-            else renderStep(currentStep);
+            else renderStep(state.currentStep);
         } catch (e) {
             setStatus(`Trajectory error: ${e.message}`);
-            renderStep(currentStep);
+            renderStep(state.currentStep);
         }
     }
 
@@ -2146,9 +2090,9 @@ window.app = (() => {
             e.stopPropagation();
             try { await deleteTrajectory(traj.dir); } catch { /* still remove row */ }
             rowEl.remove();
-            existingTrajectories = existingTrajectories.filter(t => t.dir !== traj.dir);
-            if (loadedTrajDir === traj.dir) {
-                player?.dispose(); player = null; loadedTrajDir = null;
+            state.existingTrajectories = state.existingTrajectories.filter(t => t.dir !== traj.dir);
+            if (state.loadedTrajDir === traj.dir) {
+                state.player?.dispose(); state.player = null; state.loadedTrajDir = null;
                 _renderTrajectoryPanel(document.getElementById('rpanel-content'));
             }
             if (secEl.querySelectorAll('.match-roster-row').length === 0) {
@@ -2168,16 +2112,16 @@ window.app = (() => {
 
     async function _loadTrajectoryDemo() {
         setStatus('Loading trajectory demo…');
-        const urls = TRAJ_DEMO_RELS.map(rel => meshUrl(dataRoot + '/' + rel));
+        const urls = TRAJ_DEMO_RELS.map(rel => meshUrl(state.dataRoot + '/' + rel));
         try {
-            if (!player) {
-                player = new TrajectoryPlayer(viewer);
-                player.onSeek(t => _updateScrubber(t));
+            if (!state.player) {
+                state.player = new TrajectoryPlayer(state.viewer);
+                state.player.onSeek(t => _updateScrubber(t));
             }
-            window._player = player;
-            await player.load(urls);
-            loadedTrajDir = null;
-            setStatus(`Trajectory loaded — ${player.frameCount} frames`);
+            window._player = state.player;
+            await state.player.load(urls);
+            state.loadedTrajDir = null;
+            setStatus(`Trajectory loaded — ${state.player.frameCount} frames`);
             _renderTrajectoryPanel(document.getElementById('rpanel-content'));
         } catch (e) {
             setStatus(`Trajectory error: ${e.message}`);
@@ -2191,16 +2135,16 @@ window.app = (() => {
         const timeEl = document.getElementById('rp-traj-time');
         if (timeEl) timeEl.textContent = t.toFixed(2);
         const playBtn = document.getElementById('rp-traj-play');
-        if (playBtn && player) playBtn.textContent = player.isPlaying ? '⏸' : '▶';
+        if (playBtn && state.player) playBtn.textContent = state.player.isPlaying ? '⏸' : '▶';
     }
 
     // ── Debug helpers (manual testing only, see debug.js) ────────────────────
     if (new URLSearchParams(location.search).has('debug')) {
         import('./debug.js').then(({ installDebugHelpers }) => installDebugHelpers({
-            getAlignSubjectId: () => alignSubjectId,
-            getAlignOverlay:   () => alignOverlay,
-            getAlignInMemory:  () => alignInMemory,
-            getMatchRefId:     () => matchRefId,
+            getAlignSubjectId: () => state.alignSubjectId,
+            getAlignOverlay:   () => state.alignOverlay,
+            getAlignInMemory:  () => state.alignInMemory,
+            getMatchRefId:     () => state.matchRefId,
         }));
     }
 
