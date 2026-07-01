@@ -4,6 +4,15 @@ import traceback
 
 _jobs: dict = {}
 _lock = threading.Lock()
+_MAX_JOBS = 200
+
+
+def _prune_oldest_finished():
+    """Drop the oldest done/error jobs (FIFO by insertion order) until under _MAX_JOBS.
+    Must be called with _lock held."""
+    finished = [jid for jid, j in _jobs.items() if j["status"] in ("done", "error")]
+    for jid in finished[: len(_jobs) - _MAX_JOBS]:
+        del _jobs[jid]
 
 
 def submit(fn, *args, **kwargs) -> str:
@@ -13,6 +22,8 @@ def submit(fn, *args, **kwargs) -> str:
     job = {"status": "queued", "progress": 0.0, "result": None, "error": None}
     with _lock:
         _jobs[job_id] = job
+        if len(_jobs) > _MAX_JOBS:
+            _prune_oldest_finished()
 
     def _progress(p: float):
         job["progress"] = float(p)

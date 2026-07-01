@@ -28,6 +28,13 @@ def _copy_mesh_into_project(root: Path, subject_id: str, source_path: str, now: 
     return mesh_dir
 
 
+def _parse_positive_int(body: dict, key: str, default: int, max_value: int) -> int:
+    val = body.get(key, default)
+    if not isinstance(val, int) or isinstance(val, bool) or not (1 <= val <= max_value):
+        raise ValueError(f"{key} must be an integer in [1, {max_value}]")
+    return val
+
+
 def create_app(data_root: str) -> Flask:
     # Serve the frontend/ directory that lives next to this package
     pkg_dir = Path(__file__).parent
@@ -268,8 +275,8 @@ def create_app(data_root: str) -> Flask:
             return jsonify({"error": "Forbidden: out_dir"}), 403
         sulci_ref = body.get("sulci_ref")
         sulci_mov = body.get("sulci_mov")
-        if not sulci_ref or not sulci_mov:
-            return jsonify({"error": "sulci_ref and sulci_mov are required"}), 400
+        if not isinstance(sulci_ref, list) or not isinstance(sulci_mov, list) or not sulci_ref or not sulci_mov:
+            return jsonify({"error": "sulci_ref and sulci_mov are required and must be lists"}), 400
         rot_ref_path = body.get("rot_ref_path")
         rot_mov_path = body.get("rot_mov_path")
         if rot_ref_path:
@@ -331,8 +338,11 @@ def create_app(data_root: str) -> Flask:
                 return jsonify({"error": f"Forbidden: {name}"}), 403
         ref_rot = body.get("ref_rot")
         mov_rot = body.get("mov_rot")
-        k         = int(body.get("k", 100))
-        nsteps    = int(body.get("nsteps", 1))
+        try:
+            k      = _parse_positive_int(body, "k", 100, 1000)
+            nsteps = _parse_positive_int(body, "nsteps", 1, 20)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
         w_smooth  = float(body.get("w_smooth", 1.0))
         w_deform  = float(body.get("w_deform", 10.0))
         w_project = float(body.get("w_project", 1.0))

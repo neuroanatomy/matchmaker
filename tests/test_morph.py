@@ -92,6 +92,22 @@ def test_morph_endpoint_missing_sulci_returns_400(client, tmp_path):
     assert resp.status_code == 400
 
 
+def test_morph_rejects_non_list_sulci(client, tmp_path):
+    out_dir = str(tmp_path / "morph_out")
+    payload = {
+        "ref_sphere": f"{F02_ANN}/sphere.ply",
+        "out_dir":    out_dir,
+        "sulci_ref":  "not a list",
+        "sulci_mov":  _SULCI_STUB,
+    }
+    resp = client.post(
+        "/api/morph",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
 @pytest.mark.slow
 def test_morph_endpoint_end_to_end(client, tmp_path):
     out_dir = str(tmp_path / "morph_out")

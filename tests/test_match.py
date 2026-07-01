@@ -110,6 +110,44 @@ def test_match_endpoint_returns_job(client, tmp_path):
     assert status in ("running", "done", "error"), f"Unexpected status: {status}"
 
 
+def test_match_rejects_out_of_range_k(client, tmp_path):
+    out_dir = str(tmp_path / "match_out")
+    payload = {
+        "ref_ply":      F02_PLY,
+        "ref_sphere":   f"{F02_ANN}/sphere.ply",
+        "mov_ply":      F06_PLY,
+        "mov_sphere":   f"{F06_ANN}/sphere.ply",
+        "morph_sphere": f"{F02_ANN}/sphere.ply",
+        "out_dir":      out_dir,
+        "k":            99999,
+    }
+    resp = client.post(
+        "/api/match",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
+def test_match_rejects_non_integer_nsteps(client, tmp_path):
+    out_dir = str(tmp_path / "match_out")
+    payload = {
+        "ref_ply":      F02_PLY,
+        "ref_sphere":   f"{F02_ANN}/sphere.ply",
+        "mov_ply":      F06_PLY,
+        "mov_sphere":   f"{F06_ANN}/sphere.ply",
+        "morph_sphere": f"{F02_ANN}/sphere.ply",
+        "out_dir":      out_dir,
+        "nsteps":       "abc",
+    }
+    resp = client.post(
+        "/api/match",
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert resp.status_code == 400
+
+
 # ---------------------------------------------------------------------------
 # test_match_creates_output_files  (slow — runs matchmesh2 end-to-end)
 # ---------------------------------------------------------------------------
