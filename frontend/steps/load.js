@@ -3,7 +3,8 @@ import { state } from '../state.js';
 import { FileBrowser } from '../components/filebrowser.js';
 import { ProjectModal, AddSubjectModal } from '../components/projectmodal.js';
 import { apiGet, createProject, addSubject, getProject, deleteSubject } from '../api.js';
-import { renderStep, _viewMesh as viewMesh, _toggleTexture as toggleTexture, _refreshViewer as refreshViewer } from '../app.js';
+import { renderStep } from '../app.js';
+import { viewMesh, toggleTexture, refreshViewer } from './preprocess.js';
 
 // ── Quick-load datasets ──────────────────────────────────────────────────
 const DATASETS = [
