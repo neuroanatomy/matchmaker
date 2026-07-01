@@ -93,6 +93,50 @@ test('ae2sphere → sphere2ae round-trip is identity for in-range AE coords', ()
     }
 });
 
+// ── stereographic.js delegation guard (fixes F7) ──────────────────────────────
+// stereographic.js's _stereoToSphere/_sphereToStereo now delegate to ae2sphere/
+// sphere2ae. These are the pre-refactor formulas (golden reference, computed
+// inline so this test doesn't just re-check morph.js against itself) — if a
+// future edit to ae2sphere/sphere2ae drifts from the original {x,y}/{x,y,z}
+// math that stereographic.js relied on, this test catches it.
+
+function _goldenStereoToSphere({ x, y }) {
+    const b = x*x + y*y;
+    if (b < 1e-10) return { x: 0, y: 0, z: 1 };
+    const cosR = Math.cos(Math.sqrt(b));
+    const sinR = Math.sqrt(Math.max(0, 1 - cosR*cosR));
+    const f = sinR / Math.sqrt(b);
+    return { x: x*f, y: y*f, z: cosR };
+}
+
+function _goldenSphereToStereo(p) {
+    const len = Math.sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
+    if (len < 1e-10) return { x: 0, y: 0 };
+    const pz = Math.max(-1, Math.min(1, p.z / len));
+    const b = Math.acos(pz), a = Math.atan2(p.y, p.x);
+    return { x: b*Math.cos(a), y: b*Math.sin(a) };
+}
+
+test('ae2sphere matches golden _stereoToSphere for sample AE points', () => {
+    const samples = [{ x: 0, y: 0 }, { x: 0.5, y: 0 }, { x: 0, y: 0.5 }, { x: 1, y: 1 }, { x: Math.PI/3, y: Math.PI/6 }];
+    for (const { x, y } of samples) {
+        const golden = _goldenStereoToSphere({ x, y });
+        const [px, py, pz] = ae2sphere([x, y]);
+        assertClose(px, golden.x, TOL, `x for [${x},${y}]`);
+        assertClose(py, golden.y, TOL, `y for [${x},${y}]`);
+        assertClose(pz, golden.z, TOL, `z for [${x},${y}]`);
+    }
+});
+
+test('sphere2ae matches golden _sphereToStereo for sample sphere points', () => {
+    for (const v of _ico()) {
+        const golden = _goldenSphereToStereo({ x: v[0], y: v[1], z: v[2] });
+        const [x, y] = sphere2ae(v);
+        assertClose(x, golden.x, TOL, `x for [${v}]`);
+        assertClose(y, golden.y, TOL, `y for [${v}]`);
+    }
+});
+
 // ── sulciToSbnLines ──────────────────────────────────────────────────────────
 
 test('sulciToSbnLines: empty input returns []', () => {

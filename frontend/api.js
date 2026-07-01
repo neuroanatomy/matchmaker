@@ -64,13 +64,7 @@ export async function getProject(root) {
 }
 
 export async function deleteSubject(body) {
-    const res = await fetch(API + '/api/project/subject', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`DELETE /api/project/subject → ${res.status}`);
-    return res.json();
+    return apiDelete('/api/project/subject', body);
 }
 
 export async function getMatches(projectRoot) {
@@ -78,13 +72,7 @@ export async function getMatches(projectRoot) {
 }
 
 export async function deleteMatch(body) {
-    const res = await fetch(API + '/api/project/match', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`DELETE /api/project/match → ${res.status}`);
-    return res.json();
+    return apiDelete('/api/project/match', body);
 }
 
 export async function getTrajectories(projectRoot) {

@@ -9,6 +9,25 @@ import matchmaker
 from matchmaker import jobs, pipeline
 
 
+def _copy_mesh_into_project(root: Path, subject_id: str, source_path: str, now: str) -> Path:
+    """Copy source_path into <root>/data/raw/meshes/<subject_id>/mesh.ply,
+    decompressing .gz, and write origin.json. Returns the mesh_dir."""
+    src = Path(source_path)
+    mesh_dir = root / "data" / "raw" / "meshes" / subject_id
+    mesh_dir.mkdir(parents=True, exist_ok=True)
+    dst = mesh_dir / "mesh.ply"
+    if str(src).endswith(".gz"):
+        with gzip.open(str(src), "rb") as f_in, open(str(dst), "wb") as f_out:
+            f_out.write(f_in.read())
+    else:
+        shutil.copy2(str(src), str(dst))
+    (mesh_dir / "origin.json").write_text(
+        json.dumps({"source_path": str(src.resolve()), "timestamp": now}, indent=2)
+    )
+    (root / "data" / "derived" / "annotations" / subject_id).mkdir(parents=True, exist_ok=True)
+    return mesh_dir
+
+
 def create_app(data_root: str) -> Flask:
     # Serve the frontend/ directory that lives next to this package
     pkg_dir = Path(__file__).parent
@@ -428,24 +447,9 @@ def create_app(data_root: str) -> Flask:
             subjects_to_create.append((mov_id, mov_source))
 
         for subject_id, source_path in subjects_to_create:
-            src = Path(source_path)
-            if not src.exists():
+            if not Path(source_path).exists():
                 return jsonify({"error": f"Source not found: {source_path}"}), 400
-
-            mesh_dir = root / "data" / "raw" / "meshes" / subject_id
-            mesh_dir.mkdir(parents=True, exist_ok=True)
-
-            dst = mesh_dir / "mesh.ply"
-            if str(src).endswith(".gz"):
-                with gzip.open(str(src), "rb") as f_in, open(str(dst), "wb") as f_out:
-                    f_out.write(f_in.read())
-            else:
-                shutil.copy2(str(src), str(dst))
-
-            (mesh_dir / "origin.json").write_text(
-                json.dumps({"source_path": str(src.resolve()), "timestamp": now}, indent=2)
-            )
-            (root / "data" / "derived" / "annotations" / subject_id).mkdir(parents=True, exist_ok=True)
+            _copy_mesh_into_project(root, subject_id, source_path, now)
 
         (root / "data" / "derived" / "matches").mkdir(parents=True, exist_ok=True)
         (root / "data" / "derived" / "trajectories").mkdir(parents=True, exist_ok=True)
@@ -473,25 +477,11 @@ def create_app(data_root: str) -> Flask:
         if not proj_file.exists():
             return jsonify({"error": "No project.json found at root_dir"}), 404
 
-        src = Path(source_path)
-        if not src.exists():
+        if not Path(source_path).exists():
             return jsonify({"error": f"Source not found: {source_path}"}), 400
 
-        now      = datetime.now(timezone.utc).isoformat()
-        mesh_dir = root / "data" / "raw" / "meshes" / subject_id
-        mesh_dir.mkdir(parents=True, exist_ok=True)
-
-        dst = mesh_dir / "mesh.ply"
-        if str(src).endswith(".gz"):
-            with gzip.open(str(src), "rb") as f_in, open(str(dst), "wb") as f_out:
-                f_out.write(f_in.read())
-        else:
-            shutil.copy2(str(src), str(dst))
-
-        (mesh_dir / "origin.json").write_text(
-            json.dumps({"source_path": str(src.resolve()), "timestamp": now}, indent=2)
-        )
-        (root / "data" / "derived" / "annotations" / subject_id).mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        _copy_mesh_into_project(root, subject_id, source_path, now)
 
         project = json.loads(proj_file.read_text())
         if subject_id not in project.get("subjects", []):

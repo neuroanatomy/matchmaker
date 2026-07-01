@@ -1,3 +1,5 @@
+import { ae2sphere, sphere2ae } from './morph.js';
+
 /**
  * Paper.js canvas overlay for stereographic landmark drawing.
  * Sits on top of the StereoView WebGL canvas.
@@ -95,21 +97,15 @@ export class StereographicOverlay {
         return { x: w/2 + z*x*h/(2*Math.PI), y: h/2 - z*y*h/(2*Math.PI) };
     }
 
+    // Delegates to morph.js's ae2sphere/sphere2ae (same AE↔sphere math, {x,y}/{x,y,z} calling convention)
     _stereoToSphere({ x, y }) {
-        const b = x*x + y*y;
-        if (b < 1e-10) return { x: 0, y: 0, z: 1 };
-        const cosR = Math.cos(Math.sqrt(b));
-        const sinR = Math.sqrt(Math.max(0, 1 - cosR*cosR));
-        const f = sinR / Math.sqrt(b);
-        return { x: x*f, y: y*f, z: cosR };
+        const [px, py, pz] = ae2sphere([x, y]);
+        return { x: px, y: py, z: pz };
     }
 
     _sphereToStereo(p) {
-        const len = Math.sqrt(p.x*p.x + p.y*p.y + p.z*p.z);
-        if (len < 1e-10) return { x: 0, y: 0 };
-        const pz = Math.max(-1, Math.min(1, p.z / len));
-        const b = Math.acos(pz), a = Math.atan2(p.y, p.x);
-        return { x: b*Math.cos(a), y: b*Math.sin(a) };
+        const [x, y] = sphere2ae([p.x, p.y, p.z]);
+        return { x, y };
     }
 
     // p_rotated → p_ref: apply R^T  (R = StereoView._R maps ref→rotated)
