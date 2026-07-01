@@ -416,6 +416,18 @@
     .ups-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
     .ups-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
 
+    /* ── Edges overlay checkbox ── */
+    #edges-overlay {
+      position: absolute; bottom: 10px; left: 10px; z-index: 10;
+      background: rgba(10,10,20,.6); border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px 8px;
+    }
+    .edges-toggle-label {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; color: var(--muted); cursor: pointer; user-select: none;
+    }
+    #edges-cb { cursor: pointer; accent-color: var(--accent); }
+
     /* ── Right-panel resize handle ── */
     #rpanel-resizer {
       width: 5px; flex-shrink: 0;
@@ -494,6 +506,12 @@
 
   <div id="viewer-container">
     <div class="viewer-placeholder">Select a mesh file to load it here.</div>
+    <div id="edges-overlay">
+      <label class="edges-toggle-label">
+        <input type="checkbox" id="edges-cb">
+        Edges
+      </label>
+    </div>
   </div>
 
   <div id="rpanel-resizer"></div>

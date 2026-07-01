@@ -80,6 +80,9 @@ window.app = (() => {
         viewer = new Viewer3D(document.getElementById('viewer-container'));
         window._viewer = viewer;
 
+        document.getElementById('edges-cb')
+            ?.addEventListener('change', e => viewer.setEdges(e.target.checked));
+
         _startHealthPolling();
 
         const cfg = await getConfig();

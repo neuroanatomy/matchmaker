@@ -120,6 +120,7 @@ export class Viewer3D {
         this.container = container;
         this.scene = new THREE.Scene();
         this._meshes = new Map(); // id → THREE.Object3D
+        this._edgesOn = false;
         this._initRenderer();
         this._initControls();
         this._animate();
@@ -152,6 +153,7 @@ export class Viewer3D {
     _animate() {
         requestAnimationFrame(() => this._animate());
         this.controls.update();
+        if (this._edgesOn) this._syncTrajectoryEdges();
         this.renderer.render(this.scene, this.camera);
     }
 
@@ -173,9 +175,23 @@ export class Viewer3D {
         this._removeObject(id);
         this._meshes.set(id, obj);
         this.scene.add(obj);
+        if (this._edgesOn && !id.startsWith('__edges_')) {
+            this._maybeCreateEdgesFor(id, obj);
+        }
     }
 
     _removeObject(id) {
+        if (!id.startsWith('__edges_')) {
+            const edgesObj = this._meshes.get('__edges_' + id);
+            if (edgesObj) {
+                this.scene.remove(edgesObj);
+                edgesObj.traverse(o => {
+                    o.geometry?.dispose();
+                    [].concat(o.material || []).forEach(m => m.dispose());
+                });
+                this._meshes.delete('__edges_' + id);
+            }
+        }
         const obj = this._meshes.get(id);
         if (!obj) return;
         this.scene.remove(obj);
@@ -186,6 +202,73 @@ export class Viewer3D {
             }
         });
         this._meshes.delete(id);
+    }
+
+    // Compute unique edge vertex-index pairs from a BufferGeometry.
+    // Returns a Uint32Array [a0, b0, a1, b1, …] with one pair per edge.
+    _extractEdgePairs(geo) {
+        const idx = geo.index;
+        const nTris = idx ? idx.count / 3 : geo.attributes.position.count / 3;
+        const seen = new Set();
+        const pairs = [];
+        for (let f = 0; f < nTris; f++) {
+            const a = idx ? idx.getX(f*3)   : f*3;
+            const b = idx ? idx.getX(f*3+1) : f*3+1;
+            const c = idx ? idx.getX(f*3+2) : f*3+2;
+            for (const [u, v] of [[a,b],[b,c],[c,a]]) {
+                const key = u < v ? `${u},${v}` : `${v},${u}`;
+                if (!seen.has(key)) { seen.add(key); pairs.push(u, v); }
+            }
+        }
+        return new Uint32Array(pairs);
+    }
+
+    _maybeCreateEdgesFor(id, obj) {
+        // Only create edges for plain Mesh objects; skip LineSegments, Groups (lights, landmarks), and blend (shares topology with ref)
+        if (!(obj instanceof THREE.Mesh)) return;
+        if (id === 'blend') return;
+        const mat = new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.5 });
+        if (id === 'trajectory') {
+            // Trajectory animates vertex positions in-place each frame; precompute edge pairs
+            // and sync positions every animate tick instead of rebuilding EdgesGeometry.
+            const pairs = this._extractEdgePairs(obj.geometry);
+            const nEdges = pairs.length / 2;
+            const posArr = new Float32Array(nEdges * 6);
+            const src = obj.geometry.attributes.position.array;
+            for (let i = 0; i < nEdges; i++) {
+                const a = pairs[i*2], b = pairs[i*2+1];
+                posArr[i*6]   = src[a*3];   posArr[i*6+1] = src[a*3+1]; posArr[i*6+2] = src[a*3+2];
+                posArr[i*6+3] = src[b*3];   posArr[i*6+4] = src[b*3+1]; posArr[i*6+5] = src[b*3+2];
+            }
+            const edgesGeo = new THREE.BufferGeometry();
+            edgesGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+            const lines = new THREE.LineSegments(edgesGeo, mat);
+            lines.userData.edgePairs  = pairs;
+            lines.userData.srcGeoAttr = obj.geometry.attributes.position;
+            this._meshes.set('__edges_trajectory', lines);
+            this.scene.add(lines);
+        } else {
+            const edgesGeo = new THREE.EdgesGeometry(obj.geometry);
+            const lines = new THREE.LineSegments(edgesGeo, mat);
+            this._meshes.set('__edges_' + id, lines);
+            this.scene.add(lines);
+        }
+    }
+
+    // Called every animate tick to keep trajectory edge positions in sync with animated vertices.
+    _syncTrajectoryEdges() {
+        const lines = this._meshes.get('__edges_trajectory');
+        if (!lines?.userData.edgePairs) return;
+        const { edgePairs, srcGeoAttr } = lines.userData;
+        const src = srcGeoAttr.array;
+        const dst = lines.geometry.attributes.position.array;
+        const nEdges = edgePairs.length / 2;
+        for (let i = 0; i < nEdges; i++) {
+            const a = edgePairs[i*2], b = edgePairs[i*2+1];
+            dst[i*6]   = src[a*3];   dst[i*6+1] = src[a*3+1]; dst[i*6+2] = src[a*3+2];
+            dst[i*6+3] = src[b*3];   dst[i*6+4] = src[b*3+1]; dst[i*6+5] = src[b*3+2];
+        }
+        lines.geometry.attributes.position.needsUpdate = true;
     }
 
     clearAll() {
@@ -331,6 +414,29 @@ export class Viewer3D {
     setWireframe(on) {
         const obj = this._meshes.get('main');
         if (obj instanceof THREE.Mesh) obj.material.wireframe = on;
+    }
+
+    // ── Edges overlay toggle ─────────────────────────────────────────────────
+
+    setEdges(on) {
+        this._edgesOn = on;
+        // Remove all existing edge overlays
+        for (const id of [...this._meshes.keys()]) {
+            if (!id.startsWith('__edges_')) continue;
+            const obj = this._meshes.get(id);
+            this.scene.remove(obj);
+            obj.traverse(o => {
+                o.geometry?.dispose();
+                [].concat(o.material || []).forEach(m => m.dispose());
+            });
+            this._meshes.delete(id);
+        }
+        if (!on) return;
+        // Rebuild edges for all currently loaded eligible meshes
+        for (const [id, obj] of this._meshes) {
+            if (id.startsWith('__edges_')) continue;
+            this._maybeCreateEdgesFor(id, obj);
+        }
     }
 
     // ── Landmark projection onto native mesh (align 3D view) ────────────────
