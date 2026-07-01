@@ -517,6 +517,228 @@ def _invert_pair(rot_spheres, ref_id, mov_id, matches, project_root=None):
     return _sphere_retopo(Sit, Sii, Ssi, Vsi, Ft, Fi)
 
 
+# ── run_trajectory phases ─────────────────────────────────────────────────────
+
+def _load_rotated_spheres(seq, anns_dir, dest_dir):
+    """Load each subject's annotation sphere, apply its rotation.txt, and write
+    {sid}.sphere.ply into dest_dir. Returns {sid: (rotated_V float32, F int32)}."""
+    rot_spheres = {}
+    for sid in seq:
+        sph_v, sph_f = _read_ply(str(anns_dir / sid / "sphere.ply"))
+        rot_txt = (anns_dir / sid / "rotation.txt").read_text()
+        rows = [r.split() for r in rot_txt.strip().splitlines() if r.strip()]
+        rot = np.array([[float(v) for v in r] for r in rows])
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            rotated = (sph_v.astype(np.float64) @ rot[:3, :3]).astype(np.float32)
+        rot_spheres[sid] = (rotated, sph_f)
+        igl.write_triangle_mesh(str(dest_dir / f"{sid}.sphere.ply"), rotated, sph_f)
+    return rot_spheres
+
+
+def _smooth_pairwise_deformations(seq, matches_dir, dest_dir, rot_spheres, project_root,
+                                   mode, n_deformation_smooth, _emit=None):
+    """For each adjacent (ref, mov) pair in seq, get mov's matched surface/sphere in ref
+    topology (inverting the match if only the reverse direction was computed), optionally
+    smoothing the deformation field toward the ref surface. Writes {mov}_as_{ref}.ply/
+    .sphere.ply into dest_dir. Returns (pair_plys, pair_sphere_plys), each keyed by
+    (mov, ref) -> path str."""
+    import shutil as _shutil
+
+    pair_plys        = {}  # {(mov, ref): path to matched native in ref topology}
+    pair_sphere_plys = {}  # {(mov, ref): path to matched sphere in ref topology}
+    n_pairs = len(seq) - 1
+    for k, (ref, mov) in enumerate(zip(seq, seq[1:])):
+        fwd_dir = matches_dir / f"{mov}_as_{ref}"
+        inv_dir = matches_dir / f"{ref}_as_{mov}"
+        use_inverse = not (fwd_dir / "surf.0.ply").exists() and (inv_dir / "surf.0.ply").exists()
+
+        dst_ply = str(dest_dir / f"{mov}_as_{ref}.ply")
+        sph_ply = str(dest_dir / f"{mov}_as_{ref}.sphere.ply")
+
+        if use_inverse:
+            V_inv, S_inv, F_inv = _invert_pair(rot_spheres, ref, mov, matches_dir,
+                                                project_root=project_root)
+            igl.write_triangle_mesh(dst_ply, V_inv, F_inv)
+            igl.write_triangle_mesh(sph_ply, S_inv, F_inv)
+            pair_plys[(mov, ref)]        = dst_ply
+            pair_sphere_plys[(mov, ref)] = sph_ply
+        else:
+            m_dir   = fwd_dir
+            src_ply = str(m_dir / "surf.0.ply")
+
+            if mode == "smooth" and n_deformation_smooth > 0:
+                # Va = ref native surface in sphere topology (= raw mesh, same topology).
+                # ref_surf.ply (written by run_match) is canonical; fall back to raw mesh.
+                ref_surf_p = m_dir / "ref_surf.ply"
+                _, surf_F = _read_ply(src_ply)
+                if ref_surf_p.exists():
+                    Va_tmp, _ = _read_ply(str(ref_surf_p))
+                    if len(Va_tmp) == len(surf_F):  # sanity: same topology
+                        Va, F = Va_tmp, surf_F
+                    else:
+                        Va = None
+                else:
+                    Va = None
+                if Va is None:
+                    raw_p = Path(project_root) / "data" / "raw" / "meshes" / ref / "mesh.ply"
+                    if raw_p.exists():
+                        Va, F = _read_ply(str(raw_p))  # same topology as sphere.ply
+                    else:
+                        Va, F = _read_ply(src_ply)  # last resort
+
+                Vb, _ = _read_ply(src_ply)
+                L = _uniform_laplacian(F)
+                vres = Vb.astype(np.float64)
+                Va_d = Va.astype(np.float64)
+                Vref_d = Va_d.copy()
+                for _ in range(n_deformation_smooth):
+                    delta = Va_d - vres
+                    smooth_d = delta + L @ delta  # one uniform Laplacian step
+                    vtmp = (Va_d - smooth_d).astype(np.float32)
+                    vres = _project_onto_surface(vtmp, Vref_d.astype(np.float32), F).astype(np.float64)
+                igl.write_triangle_mesh(dst_ply, vres.astype(np.float32), F)
+            else:
+                _shutil.copy2(src_ply, dst_ply)
+
+            pair_plys[(mov, ref)]        = dst_ply
+            pair_sphere_plys[(mov, ref)] = str(m_dir / "surf.0.sphere.ply")
+
+        if _emit:
+            _emit(0.10 + 0.30 * (k + 1) / n_pairs)
+
+    return pair_plys, pair_sphere_plys
+
+
+def _retopologize_chain(seq, dest_dir, rot_spheres, pair_plys, pair_sphere_plys, _emit=None):
+    """Chain barycentric retopology maps so every subject in seq[1:] is expressed in
+    seq[0]'s face topology. Writes {mov}_as_{seq[0]}.ply/.sphere.ply into dest_dir.
+    Returns (ref_F, retopo) where retopo = {sid: V native-surface array}."""
+    V0, ref_F = _read_ply(pair_plys[(seq[1], seq[0])])        # seq[0] face topology
+    S0, _     = _read_ply(pair_sphere_plys[(seq[1], seq[0])])  # sphere in seq[0] topology
+
+    igl.write_triangle_mesh(str(dest_dir / f"{seq[1]}_as_{seq[0]}.ply"),    V0,  ref_F)
+    igl.write_triangle_mesh(str(dest_dir / f"{seq[1]}_as_{seq[0]}.sphere.ply"), S0, ref_F)
+    retopo = {seq[1]: V0}
+
+    n_pairs = len(seq) - 1
+    for k, (ref, mov) in enumerate(zip(seq[1:], seq[2:]), start=1):
+        Sit, Ft = _read_ply(str(dest_dir / f"{ref}_as_{seq[0]}.sphere.ply"))
+        Sii, Fi = rot_spheres[ref]
+        Ssi, _  = _read_ply(pair_sphere_plys[(mov, ref)])
+        Vsi, _  = _read_ply(pair_plys[(mov, ref)])
+        V, S, Ft = _sphere_retopo(Sit, Sii, Ssi, Vsi, Ft, Fi)
+        igl.write_triangle_mesh(str(dest_dir / f"{mov}_as_{seq[0]}.ply"),         V, Ft)
+        igl.write_triangle_mesh(str(dest_dir / f"{mov}_as_{seq[0]}.sphere.ply"), S, Ft)
+        retopo[mov] = V
+        if _emit:
+            _emit(0.40 + 0.30 * k / n_pairs)
+
+    return ref_F, retopo
+
+
+def _build_frame_list(seq, matches_dir, project_root, rot_spheres, retopo):
+    """Assemble the ordered list of native-surface arrays for playback, youngest→oldest:
+    seq[1:] reversed (already retopologized to seq[0]'s topology in `retopo`) followed by
+    seq[0]'s own native surface (found via ref_surf.ply from the first pairwise match,
+    falling back to the raw mesh, falling back to retopo[seq[1]] as a last resort).
+    Returns list[np.ndarray]."""
+    # sphere.ply and raw mesh share the same topology (meshparam runs on the raw mesh),
+    # so raw_mesh[i] IS the surface position for sphere vertex i — no projection needed.
+    # ref_surf.ply (written by run_match since the fix) is equivalent; use it when the
+    # vertex count matches, otherwise fall back to the raw mesh directly.
+    first_m = matches_dir / f"{seq[1]}_as_{seq[0]}"
+    ref_surf_p = first_m / "ref_surf.ply"
+    V_ref_native = None
+    if ref_surf_p.exists():
+        Vtmp, _ = _read_ply(str(ref_surf_p))
+        if len(Vtmp) == len(rot_spheres[seq[0]][0]):
+            V_ref_native = Vtmp  # correct topology
+    if V_ref_native is None:
+        raw_p = Path(project_root) / "data" / "raw" / "meshes" / seq[0] / "mesh.ply"
+        if raw_p.exists():
+            V_ref_native, _ = _read_ply(str(raw_p))
+        else:
+            V_ref_native = retopo[seq[1]].copy()  # last resort: duplicate first retopo frame
+
+    V_frames = [retopo[mov] for mov in reversed(seq[1:])]  # youngest first
+    V_frames.append(V_ref_native)                           # oldest last
+    return V_frames
+
+
+def _smooth_trajectory_frames(V_frames, ref_F, mode, do_icp,
+                               n_trajectory_smooth, n_spatial_smooth, lambda_spatial):
+    """If mode == 'smooth', interpolate midpoints between keyframes (optionally ICP-aligned)
+    and apply temporal + spatial smoothing across the sequence. Returns V_frames unchanged
+    (same list, same length) if mode != 'smooth' or no smoothing was requested."""
+    if not (mode == "smooth" and (n_trajectory_smooth > 0 or do_icp)):
+        return V_frames
+
+    nf = len(V_frames)
+    ns = nf * 2 - 1
+    V_all = [None] * ns
+    for i, V in enumerate(V_frames):
+        V_all[i * 2] = V.astype(np.float64)
+
+    if do_icp:
+        for i in range(0, ns - 1, 2):
+            V_all[i + 2] = _icp(
+                V_all[i].astype(np.float32), ref_F,
+                V_all[i + 2].astype(np.float32),
+            ).astype(np.float64)
+
+    # Insert midpoint interpolants
+    for i in range(0, ns - 1, 2):
+        V_all[i + 1] = (V_all[i] + V_all[i + 2]) / 2
+
+    # Pull keyframes toward their neighbours
+    for i in range(2, ns - 1, 2):
+        V_all[i] = V_all[i - 1] / 8 + V_all[i] * (3 / 4) + V_all[i + 1] / 8
+
+    # Temporal + spatial smoothing
+    for _ in range(n_trajectory_smooth):
+        tr = list(V_all)
+        for j in range(1, ns - 1):
+            tr[j] = V_all[j - 1] / 8 + V_all[j] * (3 / 4) + V_all[j + 1] / 8
+        V_all = tr
+        if n_spatial_smooth > 0 and lambda_spatial > 0:
+            L = _uniform_laplacian(ref_F)
+            for j in range(ns):
+                Vj = V_all[j].copy()
+                for _ in range(n_spatial_smooth):
+                    Vj = Vj + lambda_spatial * (L @ Vj)
+                V_all[j] = Vj
+
+    return [V_all[i].astype(np.float32) for i in range(0, ns, 2)]
+
+
+def _write_trajectory_output(dest_dir, V_frames, ref_F, params):
+    """Center each frame (recording its translation), write playback frames to
+    {dest_dir}/trajectory/{i*2}.ply, and write params.json (adding created/n_frames/
+    translations to the given params dict). Returns {"trajectory_dir": str, "n_frames": int}."""
+    import json as _json
+    from datetime import datetime as _dt, timezone as _tz
+
+    translations = []
+    centered_frames = []
+    for V in V_frames:
+        c = V.mean(axis=0)
+        translations.append(c.tolist())
+        centered_frames.append((V - c).astype(np.float32))
+
+    traj_dir = dest_dir / "trajectory"
+    traj_dir.mkdir(exist_ok=True)
+    for i, V in enumerate(centered_frames):
+        igl.write_triangle_mesh(str(traj_dir / f"{i * 2}.ply"), V, ref_F)
+
+    params = dict(params)
+    params["created"]      = _dt.now(_tz.utc).isoformat()
+    params["n_frames"]     = len(centered_frames)
+    params["translations"] = translations
+    (dest_dir / "params.json").write_text(_json.dumps(params, indent=2))
+
+    return {"trajectory_dir": str(dest_dir), "n_frames": len(centered_frames)}
+
+
 # ── run_trajectory ────────────────────────────────────────────────────────────
 
 def run_trajectory(
@@ -545,10 +767,6 @@ def run_trajectory(
 
     Returns {"trajectory_dir": str, "n_frames": int}.
     """
-    import json as _json
-    import shutil as _shutil
-    from datetime import datetime as _dt, timezone as _tz
-
     root    = Path(project_root)
     anns    = root / "data" / "derived" / "annotations"
     matches = root / "data" / "derived" / "matches"
@@ -559,180 +777,24 @@ def run_trajectory(
         if progress:
             progress(p)
 
-    n_pairs = len(seq) - 1
-    # rough progress milestones: spheres (20%), deform (40%), retopo (70%), frames (95%), done (100%)
-
-    # ── 1. Load and rotate annotation spheres ─────────────────────────────────
-    rot_spheres = {}  # {sid: (rotated_V float32, F int32)}
-    for sid in seq:
-        sph_v, sph_f = _read_ply(str(anns / sid / "sphere.ply"))
-        rot_txt = (anns / sid / "rotation.txt").read_text()
-        rows = [r.split() for r in rot_txt.strip().splitlines() if r.strip()]
-        rot = np.array([[float(v) for v in r] for r in rows])
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            rotated = (sph_v.astype(np.float64) @ rot[:3, :3]).astype(np.float32)
-        rot_spheres[sid] = (rotated, sph_f)
-        igl.write_triangle_mesh(str(dest / f"{sid}.sphere.ply"), rotated, sph_f)
+    # rough progress milestones: spheres (10%), deform (40%), retopo (70%), frames (90%), done (100%)
+    rot_spheres = _load_rotated_spheres(seq, anns, dest)
     _emit(0.10)
 
-    # ── 2. Pairwise: get matched surface (and optionally smooth deformation) ──
-    pair_plys        = {}  # {(mov, ref): path to matched native in ref topology}
-    pair_sphere_plys = {}  # {(mov, ref): path to matched sphere in ref topology}
-    for k, (ref, mov) in enumerate(zip(seq, seq[1:])):
-        fwd_dir = matches / f"{mov}_as_{ref}"
-        inv_dir = matches / f"{ref}_as_{mov}"
-        use_inverse = not (fwd_dir / "surf.0.ply").exists() and (inv_dir / "surf.0.ply").exists()
+    pair_plys, pair_sphere_plys = _smooth_pairwise_deformations(
+        seq, matches, dest, rot_spheres, str(root), mode, n_deformation_smooth, _emit=_emit,
+    )
 
-        dst_ply = str(dest / f"{mov}_as_{ref}.ply")
-        sph_ply = str(dest / f"{mov}_as_{ref}.sphere.ply")
+    ref_F, retopo = _retopologize_chain(
+        seq, dest, rot_spheres, pair_plys, pair_sphere_plys, _emit=_emit,
+    )
 
-        if use_inverse:
-            V_inv, S_inv, F_inv = _invert_pair(rot_spheres, ref, mov, matches,
-                                                project_root=str(root))
-            igl.write_triangle_mesh(dst_ply, V_inv, F_inv)
-            igl.write_triangle_mesh(sph_ply, S_inv, F_inv)
-            pair_plys[(mov, ref)]        = dst_ply
-            pair_sphere_plys[(mov, ref)] = sph_ply
-        else:
-            m_dir   = fwd_dir
-            src_ply = str(m_dir / "surf.0.ply")
-
-            if mode == "smooth" and n_deformation_smooth > 0:
-                # Va = ref native surface in sphere topology (= raw mesh, same topology).
-                # ref_surf.ply (written by run_match) is canonical; fall back to raw mesh.
-                ref_surf_p = m_dir / "ref_surf.ply"
-                _, surf_F = _read_ply(src_ply)
-                if ref_surf_p.exists():
-                    Va_tmp, _ = _read_ply(str(ref_surf_p))
-                    if len(Va_tmp) == len(surf_F):  # sanity: same topology
-                        Va, F = Va_tmp, surf_F
-                    else:
-                        Va = None
-                else:
-                    Va = None
-                if Va is None:
-                    raw_p = root / "data" / "raw" / "meshes" / ref / "mesh.ply"
-                    if raw_p.exists():
-                        Va, F = _read_ply(str(raw_p))  # same topology as sphere.ply
-                    else:
-                        Va, F = _read_ply(src_ply)  # last resort
-
-                Vb, _ = _read_ply(src_ply)
-                L = _uniform_laplacian(F)
-                vres = Vb.astype(np.float64)
-                Va_d = Va.astype(np.float64)
-                Vref_d = Va_d.copy()
-                for _ in range(n_deformation_smooth):
-                    delta = Va_d - vres
-                    smooth_d = delta + L @ delta  # one uniform Laplacian step
-                    vtmp = (Va_d - smooth_d).astype(np.float32)
-                    vres = _project_onto_surface(vtmp, Vref_d.astype(np.float32), F).astype(np.float64)
-                igl.write_triangle_mesh(dst_ply, vres.astype(np.float32), F)
-            else:
-                _shutil.copy2(src_ply, dst_ply)
-
-            pair_plys[(mov, ref)]        = dst_ply
-            pair_sphere_plys[(mov, ref)] = str(m_dir / "surf.0.sphere.ply")
-
-        _emit(0.10 + 0.30 * (k + 1) / n_pairs)
-
-    # ── 3. Retopologize: chain barycentric maps to seq[0] topology ────────────
-    V0, ref_F = _read_ply(pair_plys[(seq[1], seq[0])])        # seq[0] face topology
-    S0, _     = _read_ply(pair_sphere_plys[(seq[1], seq[0])])  # sphere in seq[0] topology
-
-    igl.write_triangle_mesh(str(dest / f"{seq[1]}_as_{seq[0]}.ply"),    V0,  ref_F)
-    igl.write_triangle_mesh(str(dest / f"{seq[1]}_as_{seq[0]}.sphere.ply"), S0, ref_F)
-    retopo = {seq[1]: V0}
-
-    for k, (ref, mov) in enumerate(zip(seq[1:], seq[2:]), start=1):
-        Sit, Ft = _read_ply(str(dest / f"{ref}_as_{seq[0]}.sphere.ply"))
-        Sii, Fi = rot_spheres[ref]
-        Ssi, _  = _read_ply(pair_sphere_plys[(mov, ref)])
-        Vsi, _  = _read_ply(pair_plys[(mov, ref)])
-        V, S, Ft = _sphere_retopo(Sit, Sii, Ssi, Vsi, Ft, Fi)
-        igl.write_triangle_mesh(str(dest / f"{mov}_as_{seq[0]}.ply"),         V, Ft)
-        igl.write_triangle_mesh(str(dest / f"{mov}_as_{seq[0]}.sphere.ply"), S, Ft)
-        retopo[mov] = V
-        _emit(0.40 + 0.30 * (k) / n_pairs)
-
-    # ── 4. Oldest subject's native surface in ref topology ────────────────────
-    # sphere.ply and raw mesh share the same topology (meshparam runs on the raw mesh),
-    # so raw_mesh[i] IS the surface position for sphere vertex i — no projection needed.
-    # ref_surf.ply (written by run_match since the fix) is equivalent; use it when the
-    # vertex count matches, otherwise fall back to the raw mesh directly.
-    first_m = matches / f"{seq[1]}_as_{seq[0]}"
-    ref_surf_p = first_m / "ref_surf.ply"
-    V_ref_native = None
-    if ref_surf_p.exists():
-        Vtmp, _ = _read_ply(str(ref_surf_p))
-        if len(Vtmp) == len(rot_spheres[seq[0]][0]):
-            V_ref_native = Vtmp  # correct topology
-    if V_ref_native is None:
-        raw_p = root / "data" / "raw" / "meshes" / seq[0] / "mesh.ply"
-        if raw_p.exists():
-            V_ref_native, _ = _read_ply(str(raw_p))
-        else:
-            V_ref_native = V0.copy()  # last resort: duplicate first retopo frame
-
-    # ── 5. Build frame list: youngest → oldest ────────────────────────────────
-    V_frames = [retopo[mov] for mov in reversed(seq[1:])]  # youngest first
-    V_frames.append(V_ref_native)                           # oldest last
-
-    # ── 6. Optional trajectory smoothing (smooth mode only) ──────────────────
-    if mode == "smooth" and (n_trajectory_smooth > 0 or do_icp):
-        nf = len(V_frames)
-        ns = nf * 2 - 1
-        V_all = [None] * ns
-        for i, V in enumerate(V_frames):
-            V_all[i * 2] = V.astype(np.float64)
-
-        if do_icp:
-            for i in range(0, ns - 1, 2):
-                V_all[i + 2] = _icp(
-                    V_all[i].astype(np.float32), ref_F,
-                    V_all[i + 2].astype(np.float32),
-                ).astype(np.float64)
-
-        # Insert midpoint interpolants
-        for i in range(0, ns - 1, 2):
-            V_all[i + 1] = (V_all[i] + V_all[i + 2]) / 2
-
-        # Pull keyframes toward their neighbours
-        for i in range(2, ns - 1, 2):
-            V_all[i] = V_all[i - 1] / 8 + V_all[i] * (3 / 4) + V_all[i + 1] / 8
-
-        # Temporal + spatial smoothing
-        for _ in range(n_trajectory_smooth):
-            tr = list(V_all)
-            for j in range(1, ns - 1):
-                tr[j] = V_all[j - 1] / 8 + V_all[j] * (3 / 4) + V_all[j + 1] / 8
-            V_all = tr
-            if n_spatial_smooth > 0 and lambda_spatial > 0:
-                L = _uniform_laplacian(ref_F)
-                for j in range(ns):
-                    Vj = V_all[j].copy()
-                    for _ in range(n_spatial_smooth):
-                        Vj = Vj + lambda_spatial * (L @ Vj)
-                    V_all[j] = Vj
-
-        V_frames = [V_all[i].astype(np.float32) for i in range(0, ns, 2)]
+    V_frames = _build_frame_list(seq, matches, str(root), rot_spheres, retopo)
+    V_frames = _smooth_trajectory_frames(
+        V_frames, ref_F, mode, do_icp, n_trajectory_smooth, n_spatial_smooth, lambda_spatial,
+    )
     _emit(0.90)
 
-    # ── 7. Center each frame; record translation ──────────────────────────────
-    translations = []
-    centered_frames = []
-    for V in V_frames:
-        c = V.mean(axis=0)
-        translations.append(c.tolist())
-        centered_frames.append((V - c).astype(np.float32))
-
-    # ── 8. Write trajectory frames ─────────────────────────────────────────────
-    traj_dir = dest / "trajectory"
-    traj_dir.mkdir(exist_ok=True)
-    for i, V in enumerate(centered_frames):
-        igl.write_triangle_mesh(str(traj_dir / f"{i * 2}.ply"), V, ref_F)
-
-    # ── 9. Write params.json ──────────────────────────────────────────────────
     params = {
         "seq": list(seq),
         "mode": mode,
@@ -741,11 +803,8 @@ def run_trajectory(
         "n_trajectory_smooth": n_trajectory_smooth,
         "n_spatial_smooth": n_spatial_smooth,
         "lambda_spatial": lambda_spatial,
-        "created": _dt.now(_tz.utc).isoformat(),
-        "n_frames": len(centered_frames),
-        "translations": translations,
     }
-    (dest / "params.json").write_text(_json.dumps(params, indent=2))
+    result = _write_trajectory_output(dest, V_frames, ref_F, params)
     _emit(1.0)
 
-    return {"trajectory_dir": str(dest), "n_frames": len(centered_frames)}
+    return result

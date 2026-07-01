@@ -214,6 +214,24 @@ def test_run_trajectory_raw(tmp_path):
 
 
 @pytest.mark.skipif(not _has_test_match(), reason="no completed match in test project data")
+def test_refactor_output_unchanged(tmp_path):
+    """Golden-output check: run_trajectory() output must be byte-identical
+    (vertex arrays) across the pipeline.py decomposition refactor (docs/29 Phase 4)."""
+    import numpy as np
+    import igl
+    from matchmaker.pipeline import run_trajectory
+
+    pair = _first_complete_match_pair()
+    ref, mov = pair
+    seq = [ref, mov]
+
+    run_trajectory(project_root=PROJ, seq=seq, out_dir=str(tmp_path / "traj"), mode="raw")
+    V0, F0 = igl.read_triangle_mesh(str(tmp_path / "traj" / "trajectory" / "0.ply"))
+    golden = np.load(os.path.join(os.path.dirname(__file__), "fixtures", "trajectory_golden_frame0.npy"))
+    assert np.allclose(V0, golden, atol=1e-6)
+
+
+@pytest.mark.skipif(not _has_test_match(), reason="no completed match in test project data")
 def test_run_trajectory_creates_rotated_spheres(tmp_path):
     """run_trajectory() saves rotation-applied sphere for each subject."""
     import igl
