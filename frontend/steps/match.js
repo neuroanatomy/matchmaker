@@ -221,7 +221,7 @@ export function renderMatchPanel(container) {
     morphSection.appendChild(morphHdr);
 
     const morphDesc = el('p', { className: 'match-desc' });
-    morphDesc.textContent = 'Fast landmark-guided spherical warp (~5 s)';
+    morphDesc.textContent = 'Fast landmark-guided spherical warp';
     morphSection.appendChild(morphDesc);
 
     const morphBarWrap = el('div', { className: 'progress-bar-wrap' });
@@ -262,7 +262,7 @@ export function renderMatchPanel(container) {
     matchSection.appendChild(matchHdr);
 
     const matchDesc = el('p', { className: 'match-desc' });
-    matchDesc.textContent = 'Laplacian eigenvector optimisation (~1 min)';
+    matchDesc.textContent = 'Laplacian eigenvector optimisation';
     matchSection.appendChild(matchDesc);
 
     const kRow = el('div', { className: 'param-row' });
@@ -472,13 +472,14 @@ export async function runMatch(barWrap, fillEl, btn) {
         const ref = state.subjects[state.matchRefId];
         const mov = state.subjects[state.matchMovId];
 
-        // matchmesh2 naming: "ref" = brain to project onto = UI's mov
-        //                    "mov" = sphere to deform      = UI's ref
+        // pipeline.run_match() applies the matchmesh2/4 ref/mov naming inversion
+        // internally, so pass the UI's ref/mov straight through here (same as
+        // cli_match.py) — do not swap at this layer too.
         const body = {
-            ref_ply:      mov.path,
-            ref_sphere:   mov.sphere,
-            mov_ply:      ref.path,
-            mov_sphere:   ref.sphere,
+            ref_ply:      ref.path,
+            ref_sphere:   ref.sphere,
+            mov_ply:      mov.path,
+            mov_sphere:   mov.sphere,
             morph_sphere: state.morphResult.morph_sphere_path,
             out_dir:      state.matchOutDir,
             k:            state.matchK,
@@ -487,8 +488,8 @@ export async function runMatch(barWrap, fillEl, btn) {
             w_deform:     state.matchWDeform,
             w_project:    state.matchWProject,
         };
-        if (mov.rot) body.ref_rot = mov.rot;
-        if (ref.rot) body.mov_rot = ref.rot;
+        if (ref.rot) body.ref_rot = ref.rot;
+        if (mov.rot) body.mov_rot = mov.rot;
 
         const { job_id } = await apiPost('/api/match', body);
         const result = await pollJob(job_id);

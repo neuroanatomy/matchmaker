@@ -284,16 +284,22 @@ def run_match(ref_ply, ref_sphere, ref_rot,
     _emit(0.10)
 
     runner = str(Path(__file__).parent / "matchmesh_runner.py")
+    # matchmesh2 "ref" = UI's mov (brain to project onto) = mov_dir
+    # matchmesh2 "mov" = UI's ref (sphere to deform)      = ref_dir
+    # (see docs/20.checkpoint-16.md "Discovery 4" and scripts/match_pair.py)
     cmd = [
         sys.executable, runner,
-        ref_dir, mov_dir, str(morph_sphere_path), out_dir,
+        mov_dir, ref_dir, str(morph_sphere_path), out_dir,  # swap: mov→mm_ref, ref→mm_mov
         str(nsteps), str(k), str(w_smooth), str(w_deform), str(w_project),
     ]
 
     proc = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.STDOUT, text=True)
     iter_count = 0
+    tail = []
     for line in proc.stdout:
         print(line, end="", flush=True)
+        tail.append(line)
+        tail = tail[-40:]
         if "iter:" in line:
             iter_count += 1
             phase = (iter_count // 10) % 2
@@ -301,7 +307,9 @@ def run_match(ref_ply, ref_sphere, ref_rot,
 
     proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(f"matchmesh_runner failed (exit {proc.returncode})")
+        raise RuntimeError(
+            f"matchmesh_runner failed (exit {proc.returncode}):\n" + "".join(tail)
+        )
 
     _emit(1.0)
     matched_ply    = os.path.join(out_dir, f"surf.{nsteps - 1}.ply")
@@ -310,9 +318,11 @@ def run_match(ref_ply, ref_sphere, ref_rot,
     # Save UI-ref's native surface for trajectory use.
     # sphere.ply and raw mesh share the same topology (same vertex/face count),
     # so the raw mesh vertices ARE the native surface at sphere topology — no projection.
-    # mov_ply = matchmesh2's "mov" = UI's ref (template).
+    # ref_ply is UI's ref (this function's own parameter — passed straight through by
+    # both cli_match.py and the frontend; only the matchmesh_runner call above applies
+    # the matchmesh2/4 naming inversion, so ref_ply/mov_ply keep their literal meaning here).
     try:
-        ref_V2, ref_F2 = _read_ply(mov_ply)
+        ref_V2, ref_F2 = _read_ply(ref_ply)
         igl.write_triangle_mesh(os.path.join(out_dir, "ref_surf.ply"), ref_V2, ref_F2)
     except Exception:
         pass  # non-fatal; trajectory falls back on-the-fly
@@ -489,8 +499,9 @@ def _invert_pair(rot_spheres, ref_id, mov_id, matches, project_root=None):
       surf.0.sphere.ply = ref_id's optimised sphere in mov_id's face topology
       ref_surf.ply      = mov_id's native surface in mov_id's sphere topology
 
-    If ref_surf.ply is absent (pre-dates trajectory support), falls back to projecting
-    mov_id's raw mesh onto its annotation sphere — requires project_root to be set.
+    If ref_surf.ply is absent, or present but stale (wrong vertex count — e.g. written
+    before a fix to which subject it holds), falls back to projecting mov_id's raw mesh
+    onto its annotation sphere — requires project_root to be set.
 
     Returns (V, S, F): mov_id's surface and sphere expressed in ref_id's face topology.
     """
@@ -498,22 +509,29 @@ def _invert_pair(rot_spheres, ref_id, mov_id, matches, project_root=None):
     Sii, Fi = _read_ply(str(inv_dir / "surf.0.sphere.ply"))  # ref_id's sphere in mov_id topology
     Sit, Ft = rot_spheres[ref_id]                             # ref_id's annotation sphere (target)
     Ssi, _  = rot_spheres[mov_id]                             # mov_id's annotation sphere
+
+    Vsi = None
     ref_surf_p = inv_dir / "ref_surf.ply"
     if ref_surf_p.exists():
-        Vsi, _ = _read_ply(str(ref_surf_p))                  # mov_id's surface in mov_id topology
-    elif project_root is not None:
+        Vtmp, _ = _read_ply(str(ref_surf_p))                 # mov_id's surface in mov_id topology
+        if len(Vtmp) == len(Ssi):  # sanity: must share mov_id's topology, else fall back
+            Vsi = Vtmp
+
+    if Vsi is None:
+        if project_root is None:
+            raise FileNotFoundError(
+                f"ref_surf.ply missing or stale in {inv_dir}; re-run the match to "
+                "regenerate it, or pass project_root to fall back to the raw mesh"
+            )
         raw_p = Path(project_root) / "data" / "raw" / "meshes" / mov_id / "mesh.ply"
         if not raw_p.exists():
             raise FileNotFoundError(
-                f"ref_surf.ply missing in {inv_dir} and raw mesh not found at {raw_p}"
+                f"ref_surf.ply missing or stale in {inv_dir} and raw mesh not found at {raw_p}"
             )
         # sphere.ply and raw mesh share the same topology; raw mesh vertices = surface at
         # sphere topology directly — no projection needed.
         Vsi, _ = _read_ply(str(raw_p))
-    else:
-        raise FileNotFoundError(
-            f"ref_surf.ply missing in {inv_dir}; re-run the match to regenerate it"
-        )
+
     return _sphere_retopo(Sit, Sii, Ssi, Vsi, Ft, Fi)
 
 

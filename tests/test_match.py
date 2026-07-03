@@ -252,9 +252,10 @@ def test_delete_match_safety_check(client, tmp_path):
 def test_match_creates_output_files(client, tmp_path):
     import os
 
-    # Save morph sphere (use F06 sphere as initial guess)
+    # Save morph sphere (stand-in initial guess; must share ref's topology,
+    # since matchmesh2/4 morph the ref sphere — see docs/20.checkpoint-16.md)
     morph_path = str(tmp_path / "morph.sphere.ply")
-    V, F = igl.read_triangle_mesh(f"{F06_ANN}/sphere.ply")
+    V, F = igl.read_triangle_mesh(f"{F02_ANN}/sphere.ply")
     verts_flat = V.flatten().tolist()
     faces_flat = F.flatten().tolist()
 
